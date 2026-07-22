@@ -35,6 +35,20 @@ def main():
         dev = f"  mean_dev avg {sum(devs) / len(devs):5.1f}px" if devs else ""
         emit(f"  {kind:<10} {len(rs):3d} runs {length:8,.0f}px{dev}")
 
+    missed = sorted((r for r in runs
+                     if not r["kind"] and r.get("cand_ratio", 0) >= 0.6),
+                    key=lambda r: -r["run_len"])
+    if missed:
+        emit("")
+        emit(f"missed annotations — (nothing) runs with a feature covering "
+             f"≥60% ({sum(r['run_len'] for r in missed):,.0f}px):")
+        emit(f"{'border':<42} {'cand':<7} {'name':<24} {'@24px':>5} "
+             f"{'@14px':>5} {'len':>6}")
+        for r in missed:
+            emit(f"{r['tag'][:41]:<42} {r['cand_kind']:<7} "
+                 f"{r['cand_name'][:23]:<24} {r['cand_ratio']:>5.0%} "
+                 f"{r.get('cand_r14', 0):>5.0%} {r['run_len']:>6.0f}")
+
     emit("")
     emit("worst-aligned runs (mean_dev over bar, or top offenders):")
     scored = sorted((r for r in runs if r["kind"]),

@@ -22,7 +22,8 @@ from shapely.affinity import scale as ascale, translate
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
 
-from typemap.fills import PER_CHAR_HERO, _partitions, fitted_hero, polygon_ds  # noqa: E402
+from typemap.fills import (PER_CHAR_HERO, _partitions, _polygons,  # noqa: E402
+                           fitted_hero, polygon_ds)
 from typemap.svgdoc import SvgDoc, est_width  # noqa: E402
 
 CELL, PAD, COLS = 520, 26, 5
@@ -189,9 +190,9 @@ def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
         # grow lines that still have room after floating into place
         # (user note: INNER should fill its corner, not just sit there)
         for i in range(len(sizes)):
-            for _ in range(8):
+            for _ in range(12):
                 trial = list(sizes)
-                trial[i] = min(trial[i] * 1.06, max_size, cap)
+                trial[i] = min(trial[i] * 1.06, max_size, cap * 1.1)
                 if trial[i] <= sizes[i]:
                     break
                 trows = line_layout(lines, trial)
@@ -306,12 +307,64 @@ class _WarpPen:
                                             self.fn(t.transformPoint(pt))))
 
 
+# taste rule: lobed shapes whose words split across the lobes
+REGION_SPLIT = {"HILLSIDE", "BALL SQUARE", "PORTER SQUARE"}
+
+
+def _lobe_regions(polygon, n):
+    """Split a lobed polygon into n regions by erosion, or None.
+
+    Erode until the shape falls apart into n sizable cores, then grow
+    each core back and clip to the original — every lobe keeps roughly
+    its natural share of the shape."""
+    area = polygon.area
+    best = None  # (n-th core area, cores, r) — favor balanced splits;
+    # thin legs survive only as slivers, so even tiny cores count
+    for fr in (0.05, 0.08, 0.11, 0.15, 0.19):
+        r = fr * math.sqrt(area)
+        comps = sorted((g for g in _polygons(polygon.buffer(-r))
+                        if g.area > 0.005 * area),
+                       key=lambda g: g.area, reverse=True)
+        if len(comps) >= n and (best is None or comps[n - 1].area > best[0]):
+            best = (comps[n - 1].area, comps[:n], r)
+    if best is None:
+        return None
+    _, comps, r = best
+    regs, claimed = [], None
+    for comp in comps:  # largest core claims the shared elbow first
+        reg = comp.buffer(r * 1.3).intersection(polygon)
+        if claimed is not None:
+            reg = reg.difference(claimed)
+        reg = max(_polygons(reg), key=lambda g: g.area, default=None)
+        if reg is None:
+            return None
+        claimed = reg if claimed is None else claimed.union(reg)
+        regs.append(reg)
+    return regs
+
+
 def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
-    """Per-line envelope stretch: perline's layout, glyphs as outlines,
-    vertically warped to the polygon's local height. The vertical scale
-    is sampled at every glyph's advance edges and midpoint (samples are
-    shared between neighbors, so letter tops form a continuous envelope)
-    and interpolated piecewise-linearly inside each glyph."""
+    """Per-line envelope stretch — see _envelope_render. Lobed shapes in
+    REGION_SPLIT split into regions first, one word per lobe, read
+    top-to-bottom (user suggestion: HILL and SIDE in Hillside's legs)."""
+    words = SPLITS.get(name.upper(), name.upper()).split()
+    if name.upper() in REGION_SPLIT and len(words) >= 2:
+        regs = _lobe_regions(polygon, len(words))
+        if regs:
+            order = sorted(range(len(regs)),
+                           key=lambda i: (regs[i].centroid.y, regs[i].centroid.x))
+            for idx, w in zip(order, words):
+                _envelope_render(doc, regs[idx], w, margin, max_ratio)
+            return
+    _envelope_render(doc, polygon, name, margin, max_ratio)
+
+
+def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=2.5):
+    """perline's layout, glyphs as outlines, vertically warped to the
+    polygon's local height. The vertical scale is sampled at every
+    glyph's advance edges (samples are shared between neighbors, so
+    letter tops form a continuous envelope) and interpolated
+    piecewise-linearly inside each glyph."""
     from fontTools.pens.svgPathPen import SVGPathPen
 
     lay = _perline_layout(polygon, name)
@@ -346,7 +399,7 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
         if ch is not None:
             t0x, t0y = ch.coords[0]
             s_pos = (mx - t0x) * ux + (my - t0y) * uy
-            usable = 2 * min(s_pos, ch.length - s_pos) * 0.94
+            usable = 2 * min(s_pos, ch.length - s_pos) * 0.96
         else:
             usable = PER_CHAR_HERO * len(ln) * s
         sx = usable / w_nat
@@ -376,11 +429,24 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
         # the text there (user notes: the T in TEELE, HILLSIDE's tail —
         # a crushed end glyph is worse than a slightly shorter line)
         h_min = 0.45 * s
-        for _ in range(2):
+        for _ in range(1):  # one trim only — repeated passes compound
             N = 24
             xs = [w_nat * j / (N - 1) for j in range(N)]
             rooms = [up_dn_at(x) for x in xs]
-            good = [rm is not None and rm[0] + rm[1] >= h_min for rm in rooms]
+            spans = [rm[0] + rm[1] for rm in rooms if rm is not None]
+            if not spans:
+                break
+            # relative floor: an end with a small fraction of the line's
+            # best room crushes its glyph even if nominally "readable" —
+            # but on elongated slivers (North Point) the widest pocket
+            # would swallow the whole label, so use the absolute floor
+            h_eff = max(h_min, 0.35 * max(spans))
+            if max(spans) < 0.35 * usable or sum(
+                    1 for rm in rooms
+                    if rm is not None and rm[0] + rm[1] >= h_eff
+            ) < 0.5 * len(rooms):
+                h_eff = h_min
+            good = [rm is not None and rm[0] + rm[1] >= h_eff for rm in rooms]
             best = (0, -1)
             a = None
             for j, g in enumerate(good + [False]):
@@ -406,6 +472,11 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
             usable = (x_hi - x_lo) * sx * 0.98
             sx = min(usable / w_nat, s / upm * max_ratio)
 
+        # pass 1: per-glyph envelope samples + within-glyph coherence.
+        # two-sided envelope: at each sample the glyph's ink is mapped
+        # into the full free span [-dn, +up]; samples sit at advance
+        # edges (shared with the neighbors → continuous curves)
+        glyphs = []
         x_pen = 0.0
         for gname, adv in zip(gnames, advs):
             if gname is None or bounds(gname) is None:
@@ -416,21 +487,18 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
                 x_pen += adv
                 continue
             g_lo = min(gy0, 0)  # ink bottom (descenders below the baseline)
-            # two-sided envelope: at each sample the glyph's ink is mapped
-            # into the full free span [-dn, +up]; samples sit at advance
-            # edges + midpoint (edges are shared with the neighbors, so
-            # tops AND bottoms form continuous curves)
             knots, ups, dns = [], [], []
             n_k = max(3, min(17, int(adv * sx / 8) + 2))  # dense on wide glyphs
             for j in range(n_k):
                 x_k = x_pen + adv * j / (n_k - 1)
                 room = up_dn_at(x_k)
-                if room is None:
-                    continue
-                knots.append(x_k)
-                ups.append(room[0])
-                dns.append(room[1])
-            tops, bots = [], []
+                if room is not None:
+                    knots.append(x_k)
+                    ups.append(room[0])
+                    dns.append(room[1])
+            g = {"name": gname, "adv": adv, "x_pen": x_pen,
+                 "g_lo": g_lo, "gy1": gy1,
+                 "knots": knots, "ups": ups, "dns": dns, "tops": None}
             if knots:
                 tops = [max(min((u + d) / (gy1 - g_lo), max_ratio * sx),
                             0.02 * sx) for u, d in zip(ups, dns)]
@@ -438,7 +506,34 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
                 # tall side to ≤1.6× the short side instead of letting a
                 # taper crush half of it (user note: the T in TEELE)
                 lo = min(tops)
-                tops = [min(t, lo * 1.6) for t in tops]
+                g["tops"] = [min(t, lo * 1.6) for t in tops]
+            glyphs.append(g)
+            x_pen += adv
+
+        # word-level height-gradient cap: adjacent letters ≤1.5× — the
+        # TEELE T vanished beside 4×-taller E's (user call)
+        hs = [max(g["tops"]) * (g["gy1"] - g["g_lo"]) if g["tops"] else None
+              for g in glyphs]
+        idxs = [k for k, h in enumerate(hs) if h is not None]
+        for seq in (idxs, idxs[::-1]):
+            prev = None
+            for k in seq:
+                if prev is not None:
+                    hs[k] = min(hs[k], hs[prev] * 1.5)
+                prev = k
+        for k, g in enumerate(glyphs):
+            if g["tops"] and hs[k] is not None:
+                cur = max(g["tops"]) * (g["gy1"] - g["g_lo"])
+                if hs[k] < cur:
+                    f = hs[k] / cur
+                    g["tops"] = [t * f for t in g["tops"]]
+
+        # pass 2: bottoms, de-skew, render
+        for g in glyphs:
+            gname, adv, gx_pen = g["name"], g["adv"], g["x_pen"]
+            g_lo, gy1 = g["g_lo"], g["gy1"]
+            knots, ups, dns, tops = g["knots"], g["ups"], g["dns"], g["tops"]
+            if knots:
                 bots = [-d + (u + d - (gy1 - g_lo) * t) / 2
                         for u, d, t in zip(ups, dns, tops)]
                 # de-skew: cap the baseline tilt inside one glyph (user
@@ -453,7 +548,7 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
                     bots = [max(b, -d) for b, d in zip(bots, dns)]
                     tops = [max(min(t, (u - b) / (gy1 - g_lo)), 0.02 * sx)
                             for t, u, b in zip(tops, ups, bots)]
-            if not knots:
+            else:
                 # baseline sample outside the polygon: stay banded anyway
                 sy0 = min(s / upm, max_ratio * sx)
                 if band_up != float("inf"):
@@ -461,7 +556,7 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
                 if band_dn != float("inf") and g_lo < 0:
                     sy0 = min(sy0, band_dn / -g_lo)
                 sy0 = max(sy0, 0.02 * sx)
-                knots, tops, bots = [x_pen], [sy0], [g_lo * sy0]
+                knots, tops, bots = [gx_pen], [sy0], [g_lo * sy0]
 
             def interp(x, vals, knots=knots):
                 if x <= knots[0] or len(knots) == 1:
@@ -471,7 +566,8 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
                         return va + (vb - va) * (x - a) / (b - a)
                 return vals[-1]
 
-            def warp(pt, x_pen=x_pen, g_lo=g_lo):
+            def warp(pt, x_pen=gx_pen, g_lo=g_lo, tops=tops, bots=bots,
+                     interp=interp):
                 gx, gy = pt
                 x = x_pen + gx
                 t = x * sx - w_nat * sx / 2
@@ -481,7 +577,6 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
             pen = SVGPathPen(gs, ntos=lambda v: f"{v:.1f}")
             gs[gname].draw(_WarpPen(pen, warp))
             doc.raw(f'<path d="{pen.getCommands()}" fill="{HERO_STYLE["fill"]}"/>')
-            x_pen += adv
 
 
 ALGORITHMS = {
@@ -512,9 +607,9 @@ def main():
         bx0, by0, bx1, by1 = cell_poly.bounds
         cell_poly = translate(cell_poly, (CELL - (bx1 - bx0)) / 2 - (bx0 - cx),
                               (CELL - (by1 - by0)) / 2 - (by0 - cy))
-        # border at luminance ≥ 128 (#999) so measure.py never counts it
+        # border at luminance ≥ 128 (#888 = 136) so measure.py never counts it
         doc.raw(f'<path d="{" ".join(polygon_ds(cell_poly))}" fill="none" '
-                f'stroke="#999999" stroke-width="3" fill-rule="evenodd"/>')
+                f'stroke="#888888" stroke-width="4" fill-rule="evenodd"/>')
         algo(doc, cell_poly, f["name"])
         doc.raw(f'<text x="{cx + 8}" y="{cy + 16}" font-size="12" '
                 f'font-family="monospace" fill="#999999">{f["name"]}</text>')
