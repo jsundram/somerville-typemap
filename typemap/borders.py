@@ -49,7 +49,7 @@ def _clean_lines(geom):
 
 
 def classify(border, features, tree: STRtree, tol: float = 14,
-             min_ratio: float = 0.45, qualify: float = 0.55):
+             min_ratio: float = 0.5, qualify: float = 0.62):
     """Which feature runs along `border`?
 
     features: [(kind, name, geom)] indexed by `tree` over `geoms`.

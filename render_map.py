@@ -19,8 +19,8 @@ from pathlib import Path
 
 from pyproj import Transformer
 from shapely import STRtree
-from shapely.geometry import LineString, MultiLineString, shape
-from shapely.ops import linemerge, transform, unary_union
+from shapely.geometry import LineString, MultiLineString, Point, shape
+from shapely.ops import linemerge, substring, transform, unary_union
 
 from config.style import HERO_CYCLE, LAYERS, PAPER
 from config.words import (LINE_COLORS, PATH_FAMILY, RAIL_MAINLINES, RAIL_RENAME,
@@ -87,10 +87,29 @@ def main():
     osm = load_layers(json.loads((ROOT / "data/cache/overpass.json").read_text()))
     towns_raw = json.loads((ROOT / "data/cache/boundaries.json").read_text())["elements"]
 
-    city_pg = to_page(city)
     hoods_pg = sorted((name, to_page(g)) for name, g in hoods)
-    street_clip = city_pg.buffer(6)
     frame = to_page(city.buffer(FRINGE).envelope)
+
+    # The neighborhoods dataset doesn't quite tile the municipal boundary
+    # (e.g. a wedge between Hillside and the Mystic). Absorb each gap
+    # piece of the OSM admin polygon into the neighborhood it borders
+    # most, so no sliver of Somerville goes unfilled.
+    som_el = next((el for el in towns_raw if el["type"] == "relation"
+                   and el.get("tags", {}).get("name") == "Somerville"), None)
+    if som_el is not None:
+        admin_pg = ll_to_page(_relation_polygon(som_el)).buffer(0)
+        gaps = admin_pg.difference(
+            unary_union([g for _, g in hoods_pg]).buffer(1))
+        for piece in getattr(gaps, "geoms", [gaps]):
+            if piece.area < 400:
+                continue
+            i = max(range(len(hoods_pg)),
+                    key=lambda i: piece.buffer(8).intersection(hoods_pg[i][1]).area)
+            name, geom = hoods_pg[i]
+            hoods_pg[i] = (name, unary_union([geom, piece.buffer(1)]).buffer(0))
+
+    city_pg = unary_union([g for _, g in hoods_pg]).buffer(0)
+    street_clip = city_pg.buffer(6)
 
     # Adjacent towns (page-space, clipped) — needed before coloring so
     # neighborhoods also avoid clashing with the town next door.
@@ -205,9 +224,12 @@ def main():
                 street_parts.append((name, cls, part))
 
     rails_grouped = {}
+    known_rail = set(RAIL_MAINLINES) | {"Grand Junction", "Green Line"}
     for name, line in osm["rails"]:
-        rails_grouped.setdefault(RAIL_RENAME.get(name, name), []).append(
-            ll_to_page(line).simplify(1.5))
+        name = RAIL_RENAME.get(name, name)
+        if name not in known_rail:
+            name = ""  # yard-track names ("4th Iron", "Track 9") inherit below
+        rails_grouped.setdefault(name, []).append(ll_to_page(line).simplify(1.5))
     # unnamed yard/siding tracks inherit the name of the named line they
     # run beside — the Fitchburg Line corridor is mostly unnamed tracks
     named_geom = {n: unary_union(segs) for n, segs in rails_grouped.items() if n}
@@ -257,7 +279,9 @@ def main():
                 waterway_parts.append((name, part))
 
     feats = ([("street", n, g) for n, _, g in street_parts]
-             + [("rail", n, g) for n, g in rail_parts]
+             # GLX tracks share the commuter corridors; borders read as the
+             # corridor's line (Fitchburg/Lowell), never a blend with GLX
+             + [("rail", n, g) for n, g in rail_parts if n != "Green Line"]
              + [("path", n, g) for n, g in path_parts]
              + [("water", n, g) for n, g in waterway_parts]  # named centerlines
              + [("waterbody", n or "water", g) for n, g in water_comps])
@@ -289,11 +313,27 @@ def main():
         # the demarcating feature: draw its real geometry near the border
         # (a census-block border zigzags along a rail corridor; the train
         # doesn't) — water bodies/unmatched keep the border line itself.
-        # Flat caps keep the feature from overshooting the run's ends.
+        # Cut the feature EXACTLY between the projections of the run's
+        # endpoints so the stroke starts and stops where the border does.
+        stroke = run
         if kind in ("street", "rail", "path", "water"):
-            stroke = _clean_lines(fgeom.intersection(run.buffer(24, cap_style="flat")))
-        else:
-            stroke = run
+            if isinstance(fgeom, LineString):
+                s0 = fgeom.project(Point(run.coords[0]))
+                s1 = fgeom.project(Point(run.coords[-1]))
+                if abs(s1 - s0) >= 20:
+                    stroke = substring(fgeom, min(s0, s1), max(s0, s1))
+                else:
+                    stroke = None
+            else:
+                stroke = _clean_lines(
+                    fgeom.intersection(run.buffer(18, cap_style="flat")))
+            # a matched stroke must actually hug the border — a nearby
+            # parallel street a block away (Porter St) is not this border
+            slack = 60 if kind == "rail" else 20  # rail corridors are wide
+            if (stroke is not None
+                    and stroke.hausdorff_distance(run) > slack):
+                stroke, kind, fname = run, None, ""
+                color, dash = BORDER_STYLE[None]
         if stroke is None:
             return
         parts = [p for p in getattr(stroke, "geoms", [stroke])
@@ -323,8 +363,26 @@ def main():
         for part in getattr(seg, "geoms", [seg]):
             if not isinstance(part, LineString) or part.length < 20:
                 continue
-            pieces = split_chunks(part)
+            pieces = split_chunks(part, 160)
             verdicts = [classify(p, feats, tree) for p in pieces]
+            # smoothing: a lone flickering chunk between two agreeing
+            # neighbors adopts their verdict if their feature plausibly
+            # covers it too (extends Kidder Ave to meet College Ave)
+            for k in range(1, len(pieces) - 1):
+                prev, nxt = verdicts[k - 1], verdicts[k + 1]
+                if (prev[:2] == nxt[:2] and prev[:2] != verdicts[k][:2]
+                        and prev[0] is not None
+                        and pieces[k].intersection(prev[2].buffer(16)).length
+                        >= 0.3 * pieces[k].length):
+                    verdicts[k] = prev
+            # ends: an unmatched end chunk joins its neighbor's feature
+            # when that feature still covers a fair share of it
+            for k, nb in ((0, 1), (len(pieces) - 1, len(pieces) - 2)):
+                if (0 <= nb < len(pieces) and verdicts[k][0] is None
+                        and verdicts[nb][0] is not None
+                        and pieces[k].intersection(verdicts[nb][2].buffer(16)).length
+                        >= 0.3 * pieces[k].length):
+                    verdicts[k] = verdicts[nb]
             i = 0
             while i < len(pieces):
                 j = i

@@ -46,7 +46,9 @@ RAIL_RENAME = {
 }
 
 # When an unnamed track could inherit from several lines, prefer these.
-RAIL_MAINLINES = ["Fitchburg Line", "Lowell Line", "Eastern Line", "Green Line"]
+# (No Green Line here: the GLX rides existing commuter corridors, and a
+# border should read as one consistent line — the corridor's, not both.)
+RAIL_MAINLINES = ["Fitchburg Line", "Lowell Line", "Eastern Line"]
 
 # The greenway spine: the Community Path and its continuations past Davis
 # toward Alewife and Arlington. Rendered across the whole frame (other

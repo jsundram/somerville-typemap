@@ -42,11 +42,19 @@ neighborhood shapes (spill/coverage are ink-pixel ratios):
 ## The loop
 
 ```sh
-uv run experiments/warp/export_shapes.py   # real hood polygons → shapes.json
-uv run experiments/warp/render_sheet.py baseline   # → sheet.svg + sheet_layout.json
-# rasterize (headless chrome or a browser) → sheet.png
-uv run experiments/warp/measure.py sheet.png       # per-hood coverage/spill table
+experiments/warp/iterate.sh [algorithm]    # render → rasterize (headless Chrome) → measure
 ```
+
+That one script runs the whole measured loop: `render_sheet.py` →
+`sheet.svg` → headless Chrome → `sheet.png` → `measure.py` (table on
+stdout, also saved to `measure.txt`). `export_shapes.py` only needs
+re-running if the page transform changes. `build_review.py` assembles
+`review.html` (the artifact review page) from the outputs.
+
+Automated driving: the `/warp-iterate` skill runs one full iteration
+(read this README → implement/tune → `iterate.sh` → log results →
+republish the review artifact); `/loop /warp-iterate` keeps it going,
+pausing for human taste feedback when it matters.
 
 Iterate: implement an algorithm in `render_sheet.py`'s `ALGORITHMS` dict,
 re-run, compare the table + eyeball the sheet. Keep the best per-shape
@@ -75,9 +83,20 @@ Anything written here is treated as the spec on the next iteration.
 
 - Reading order must survive: top line first, left to right.
 - A stretched letter should still look like the same typeface, not a balloon.
+- Lines in a multi-line label may take **different font sizes** — fit each
+  line to its own chord instead of sharing the smallest line's size. It
+  should still read as one label (keep adjacent-line size ratios modest).
+- An earlier (smaller) line may float anywhere between the **start and
+  center** of the widest line — never right of center (it would read as a
+  suffix), but don't glue it to the start if there's more room inward
+  (user note 2026-07-22: INNER in Inner Belt, TEN in Ten Hills).
 
 ## Results log
 
 | Date | Algorithm | Median coverage | Max spill | Notes |
 |---|---|---|---|---|
 | 2026-07-22 | baseline (`fitted_hero`) | 12.8% | 37.8% (North Point) | clean baselines, no warping. Known issues: `min_size` floor overflows tiny slivers (North Point/Twin City/Porter); single-axis layout leaves bent shapes (Hillside, Ball Square's south lobe) mostly empty. |
+| 2026-07-22 | perline (per-line font sizes, user-suggested) | 16.1% | 28.1% (North Point) | +3.3pt median; Porter/Twin City spill → 0. Taste flags: Twin City visually reads "CITY TWIN" and Inner Belt order ambiguous (steep axis + size inversion breaks reading order); EAST/SOMERVILLE size ratio extreme (~3:1); Hillside still 5.5% (needs bent-shape handling). User verdict: fix reading order; no ratio cap needed; proceed to envelope stretch. |
+| 2026-07-22 | perline + reading-order fix | 14.0% | 28.1% (North Point) | small early lines start-align over the widest line: Twin City reads TWIN/CITY, Inner Belt in order — but INNER collapses in its corner (−1.9pt median). |
+| 2026-07-22 | envelope (glyph outlines, per-glyph vertical stretch) | 18.9% | 4.7% (Boynton Yards) | first outline renderer; sliver spill solved (North Point 17.2%/0.0). Flags: adjacent-glyph height jumps read ransom-note (SPRING/WINTER/UNION); interline band collapses line 2 under a tiny line 1 (Inner Belt 5.4%); spill at slanted boundaries — center-ray misses glyph corners (Boynton). Next: smooth the envelope across glyphs, widen the band, sample edge rays. |
+| 2026-07-22 | envelope v2 (continuous warp: shared advance-edge samples, piecewise-linear inside glyphs; wider interline band) | 25.0% | 3.2% (Boynton Yards) | ransom-note jumps gone; letter tops flow with the shape. Remaining: partitions scored before geometric shrink, so Inner Belt (9.7%)/Ten Hills (12.6%) keep collapsed layouts; straight baselines leave bellies empty below and spill where the baseline exits the polygon (Boynton). Next lever: two-sided envelope — per-glyph baseline follows the lower boundary. |
