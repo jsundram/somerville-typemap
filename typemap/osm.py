@@ -17,7 +17,8 @@ def _relation_polygon(el):
     """Assemble a (multi)polygon from a relation's outer/inner member ways."""
     outers, inners = [], []
     for m in el.get("members", []):
-        coords = [(g["lon"], g["lat"]) for g in m.get("geometry", [])]
+        # bbox-clipped output puts null placeholders for out-of-bbox vertices
+        coords = [(g["lon"], g["lat"]) for g in (m.get("geometry") or []) if g]
         if len(coords) < 2:
             continue
         (outers if m.get("role") != "inner" else inners).append(LineString(coords))

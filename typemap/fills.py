@@ -115,6 +115,69 @@ def street_label(doc: SvgDoc, line, name: str, style: dict, sep: str = " · ") -
     doc.text_on_path(path_d(coords), text, style)
 
 
+def fitted_hero(doc: SvgDoc, polygon, name: str, style: dict,
+                bulge: float = 0.10, max_size: float = 84, min_size: float = 13) -> None:
+    """A hero label that actually fits inside `polygon`.
+
+    The baseline follows the polygon's own orientation: the long axis of
+    its minimum rotated rectangle, moved to a chord through the label
+    point and clipped to the polygon. Font size is chosen so the text
+    fits the chord and the polygon's short dimension; names that still
+    can't fit on one line are stacked word-wise on parallel baselines.
+    """
+    import math
+
+    mrr = polygon.minimum_rotated_rectangle
+    corners = list(mrr.exterior.coords)[:4]
+    edges = [(corners[i], corners[(i + 1) % 4]) for i in range(4)]
+    lengths = [math.dist(a, b) for a, b in edges]
+    i_long = lengths.index(max(lengths))
+    (ax, ay), (bx, by) = edges[i_long]
+    long_len, short_len = lengths[i_long], lengths[(i_long + 1) % 4]
+    ux, uy = (bx - ax) / long_len, (by - ay) / long_len
+    if ux < 0:  # keep text left-to-right
+        ux, uy = -ux, -uy
+    px, py = -uy, ux
+    if py < 0:  # keep the perpendicular pointing screen-down, for stacking lines
+        px, py = -px, -py
+
+    c = polygon.representative_point()
+    chord = LineString([(c.x - ux * long_len, c.y - uy * long_len),
+                        (c.x + ux * long_len, c.y + uy * long_len)]).intersection(polygon)
+    if hasattr(chord, "geoms"):
+        chord = max(chord.geoms, key=lambda g: g.length, default=None)
+    usable = chord.length * 0.92 if chord is not None and not chord.is_empty else long_len * 0.6
+
+    text = name.upper()
+    per_char = 0.68  # rounded-bold caps run wider than the body estimate
+    size = min(max_size, short_len * 0.40, usable / (per_char * len(text)))
+    lines = [text]
+    if size < 24 and " " in text:  # stack the words instead
+        words = text.split()
+        k = min(range(1, len(words)),
+                key=lambda k: abs(len(" ".join(words[:k])) - len(" ".join(words[k:]))))
+        lines = [" ".join(words[:k]), " ".join(words[k:])]
+        longest = max(len(ln) for ln in lines)
+        size = min(max_size, short_len * 0.28, usable / (per_char * longest))
+    size = max(size, min_size)
+
+    mx, my = (chord.interpolate(0.5, normalized=True).coords[0]
+              if chord is not None and not chord.is_empty else (c.x, c.y))
+    style = {**style, "font_size": round(size, 1), "text_anchor": "middle"}
+    leading = size * 1.12
+    for i, ln in enumerate(lines):
+        off = (i - (len(lines) - 1) / 2) * leading + size * 0.35  # baseline sits below center
+        ox, oy = mx + px * off, my + py * off
+        half = est_width(ln, size) * 0.75
+        x0, y0 = ox - ux * half, oy - uy * half
+        x1, y1 = ox + ux * half, oy + uy * half
+        # bow the baseline gently "up" (against the stacking direction)
+        cxp = (x0 + x1) / 2 - px * bulge * 2 * half
+        cyp = (y0 + y1) / 2 - py * bulge * 2 * half
+        d = f"M {x0:.2f},{y0:.2f} Q {cxp:.2f},{cyp:.2f} {x1:.2f},{y1:.2f}"
+        doc.text_on_path(d, ln, style, start_offset="50%")
+
+
 def arched_label(doc: SvgDoc, center: tuple[float, float], text: str, style: dict,
                  width: float, bulge: float = 0.25) -> None:
     """A hero label on an upward-bulging arc centered at `center`.

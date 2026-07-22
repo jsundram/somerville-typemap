@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-BBOX = "42.3725,-71.1350,42.4210,-71.0620"  # S,W,N,E — Somerville + fringe
+BBOX = "42.3550,-71.1550,42.4350,-71.0400"  # S,W,N,E — Somerville + surroundings
 ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",

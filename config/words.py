@@ -31,3 +31,16 @@ LINE_COLORS = {"red": "#da291c", "orange": "#ed8b00", "green": "#00843d"}
 
 # Stations rendered even though the point sits just outside the city clip.
 STATION_KEEP = set(STATION_LINES)
+
+# Adjacent municipalities (rainbow-map style color blocks around the city).
+# Only towns listed here are rendered. display: what the label says —
+# within our frame Boston's visible sliver is Charlestown.
+TOWNS = {
+    "Medford": {"color": "#c8412f"},
+    "Cambridge": {"color": "#2f8f4e"},
+    "Everett": {"color": "#7a3fbf"},
+    "Boston": {"color": "#e8a02a", "display": "Charlestown"},
+    "Arlington": {"color": "#2f6aa8"},
+    "Malden": {"color": "#d13c8f"},
+    "Chelsea": {"color": "#8a8378"},
+}

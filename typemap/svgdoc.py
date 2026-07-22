@@ -34,16 +34,18 @@ def path_d(coords, close: bool = False) -> str:
 class SvgDoc:
     """Collects defs + body elements, then serializes."""
 
-    def __init__(self, width: float, height: float, background: str = "#faf7f0"):
+    def __init__(self, width: float, height: float, background: str | None = "#faf7f0",
+                 id_prefix: str = ""):
         self.width, self.height = width, height
         self.background = background
+        self.id_prefix = id_prefix  # keeps ids unique when docs are combined
         self._defs: list[str] = []
         self._body: list[str] = []
         self._n = 0
 
     def _next_id(self, prefix: str) -> str:
         self._n += 1
-        return f"{prefix}{self._n}"
+        return f"{self.id_prefix}{prefix}{self._n}"
 
     def add_path_def(self, d: str) -> str:
         pid = self._next_id("p")
@@ -83,12 +85,14 @@ class SvgDoc:
         self._body.append(element)
 
     def tostring(self) -> str:
+        bg = (f'<rect width="100%" height="100%" fill="{self.background}"/>\n'
+              if self.background else "")
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" '
             f'width="{self.width}" height="{self.height}" '
             f'viewBox="0 0 {self.width} {self.height}">\n'
-            f'<rect width="100%" height="100%" fill="{self.background}"/>\n'
-            f"<defs>{''.join(self._defs)}</defs>\n"
+            + bg
+            + f"<defs>{''.join(self._defs)}</defs>\n"
             + "\n".join(self._body)
             + "\n</svg>\n"
         )
@@ -96,6 +100,22 @@ class SvgDoc:
     def write(self, path):
         with open(path, "w") as f:
             f.write(self.tostring())
+
+
+def write_combined(path, docs: list[SvgDoc], width: float, height: float,
+                   background: str = "#faf7f0"):
+    """Merge several layer docs (distinct id_prefixes!) into one SVG."""
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">',
+        f'<rect width="100%" height="100%" fill="{background}"/>',
+        "<defs>" + "".join(d for doc in docs for d in doc._defs) + "</defs>",
+    ]
+    parts += [f'<g id="{doc.id_prefix or i}">' + "\n".join(doc._body) + "</g>"
+              for i, doc in enumerate(docs)]
+    parts.append("</svg>")
+    with open(path, "w") as f:
+        f.write("\n".join(parts))
 
 
 def style_attrs(style: dict) -> str:
