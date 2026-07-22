@@ -22,19 +22,25 @@ text.
 | Layer | Source | License / note |
 |---|---|---|
 | Streets, parks, water, Community Path, T stops | [OpenStreetMap](https://www.openstreetmap.org/) via the Overpass API | © OpenStreetMap contributors, [ODbL](https://www.openstreetmap.org/copyright). Attribution required on any published map. |
-| Neighborhood boundaries | [simplemaps Somerville neighborhoods](https://simplemaps.com/city/somerville/neighborhoods) | ⚠️ **simplemaps data has its own terms of use.** Fine for a personal build; review/replace before this becomes a sellable or printed product. Their boundaries are editorial/generalized — treat as a starting layer to be hand-nudged. |
+| Neighborhood boundaries | [City of Somerville open data: Neighborhoods](https://data.somervillema.gov/GIS-Data/Neighborhoods/n5md-vqta) | **Public Domain.** Official ESRI polygons (19 neighborhoods, incl. Duck Village!), already in EPSG:2249 — this supersedes the original simplemaps plan: no georeferencing needed and no license concerns. |
 | Typographic content, fonts, palette | hand-authored in [`config/`](config/) | Fonts must be licensed for print use — check before publishing. |
 
 ## Layout
 
 ```
-typemap/            the engine: geometry, fills, SVG emission
+typemap/            the engine: fills, osm parsing, border classification, SVG emission
 config/             words, fonts, palette, type hierarchy — the iterate-here layer
 data/fixtures/      tiny hand-made geometries for engine development
-data/cache/         raw Overpass responses (network-tolerant cache)
-out/                rendered SVGs (not committed)
-render_fixture.py   renders the engine-proving fixture scene
+data/cache/         raw Overpass responses (committed: offline-reproducible builds)
+experiments/warp/   crammed hero-glyph sub-problem (own README, metrics, loop)
+experiments/borders/ boundary-annotation alignment loop (own README, metrics)
+out/                rendered SVGs + viewer (not committed)
 ```
+
+The map renders as eight toggleable layers (basemap, neighborhoods,
+transit, adjacent towns, heroes, road/park/water typography, boundary
+lines, boundary annotations) — `out/viewer.html` stacks them with
+checkboxes; `out/somerville.svg` is the combined print composite.
 
 ## Running
 
@@ -42,12 +48,19 @@ Scripts use [PEP 723](https://peps.python.org/pep-0723/) inline dependencies —
 run them with [`uv`](https://docs.astral.sh/uv/):
 
 ```sh
-uv run render_fixture.py   # → out/fixture.svg
+uv run render_fixture.py        # engine smoke test → out/fixture.svg
+uv run fetch_neighborhoods.py   # city polygons → data/neighborhoods.geojson
+uv run fetch_osm.py             # OSM → data/cache/overpass.json
+uv run render_map.py            # the map → out/somerville.svg
 ```
+
+Both fetchers cache to disk and exit 0 on network failure, so a flaky
+Overpass run never corrupts the build — and the cache is committed, so
+`render_map.py` works offline from a fresh clone.
 
 ## Build order
 
 1. ✅ Scaffold
-2. Typographic-fill engine, proven against a hand-made fixture (no network)
-3. Overpass fetch + simplemaps georeferencing
-4. Full Somerville assembly & styling iteration
+2. ✅ Typographic-fill engine, proven against a hand-made fixture (no network)
+3. ✅ Overpass fetch + official city neighborhood polygons (GLX stations verified)
+4. ✅ Full Somerville assembly — styling iteration ongoing

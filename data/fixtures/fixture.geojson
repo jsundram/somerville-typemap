@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "note": "Hand-made engine-proving fixture. Coordinates are SVG user units (y down), not lat/lon.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"kind": "neighborhood", "name": "Union Square", "fill_words": ["union square", "somerville", "est. 1842"]},
+      "geometry": {"type": "Polygon", "coordinates": [[
+        [60, 90], [300, 40], [520, 70], [630, 160], [610, 330],
+        [480, 420], [280, 450], [110, 380], [50, 240], [60, 90]
+      ]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "park", "name": "Lincoln Park", "fill_words": ["lincoln park"]},
+      "geometry": {"type": "Polygon", "coordinates": [[
+        [690, 150], [880, 120], [960, 200], [940, 330], [820, 400],
+        [700, 360], [660, 250], [690, 150]
+      ]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "water", "name": "Mystic River"},
+      "geometry": {"type": "Polygon", "coordinates": [[
+        [0, 540], [90, 515], [190, 535], [290, 510], [390, 530],
+        [490, 505], [590, 528], [690, 508], [790, 532], [890, 512],
+        [1000, 528], [1000, 700], [0, 700], [0, 540]
+      ]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "street", "name": "Somerville Ave", "class": "major"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [0, 490], [140, 478], [300, 470], [460, 452], [620, 420],
+        [760, 370], [880, 300], [960, 220], [1000, 160]
+      ]}
+    }
+  ]
+}
