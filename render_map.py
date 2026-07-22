@@ -23,9 +23,9 @@ from shapely.geometry import LineString, MultiLineString, shape
 from shapely.ops import linemerge, transform, unary_union
 
 from config.style import HERO_CYCLE, LAYERS, PAPER
-from config.words import (LINE_COLORS, PATH_FAMILY, RAIL_RENAME, STATION_LINES,
-                          TOWNS, WORD_OVERRIDES)
-from typemap.borders import _clean_lines, classify, shared_borders
+from config.words import (LINE_COLORS, PATH_FAMILY, RAIL_MAINLINES, RAIL_RENAME,
+                          STATION_LINES, TOWNS, WORD_OVERRIDES)
+from typemap.borders import _clean_lines, classify, shared_borders, split_chunks
 from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
 from typemap.osm import load_layers, _relation_polygon
@@ -206,17 +206,33 @@ def main():
 
     rails_grouped = {}
     for name, line in osm["rails"]:
-        rails_grouped.setdefault(RAIL_RENAME.get(name, name), []).append(line)
+        rails_grouped.setdefault(RAIL_RENAME.get(name, name), []).append(
+            ll_to_page(line).simplify(1.5))
+    # unnamed yard/siding tracks inherit the name of the named line they
+    # run beside — the Fitchburg Line corridor is mostly unnamed tracks
+    named_geom = {n: unary_union(segs) for n, segs in rails_grouped.items() if n}
+    for seg in rails_grouped.pop("", []):
+        dists = {n: seg.distance(g) for n, g in named_geom.items()}
+        best = min(dists, default=None, key=dists.get)
+        if best is not None and dists[best] < 15:
+            # prefer a mainline over a branch when both are plausibly close
+            for main in RAIL_MAINLINES:
+                if dists.get(main, 1e9) < 25:
+                    best = main
+                    break
+            rails_grouped[best].append(seg)
+        else:
+            rails_grouped.setdefault("rail line", []).append(seg)
     rail_parts = []
     for name, segs in rails_grouped.items():
-        merged = unary_union([ll_to_page(s) for s in segs])
+        merged = unary_union(segs)
         if isinstance(merged, MultiLineString):
             merged = linemerge(merged)
         for part in getattr(merged, "geoms", [merged]):
-            p = part.simplify(1.5).intersection(frame)
+            p = part.intersection(frame)
             for line in getattr(p, "geoms", [p]):
                 if isinstance(line, LineString) and line.length > 40:
-                    rail_parts.append((name or "rail line", line))
+                    rail_parts.append((name, line))
 
     water_pg = []
     for name, geom in osm["water"]:
@@ -243,8 +259,8 @@ def main():
     feats = ([("street", n, g) for n, _, g in street_parts]
              + [("rail", n, g) for n, g in rail_parts]
              + [("path", n, g) for n, g in path_parts]
-             + [("water", n, g) for n, g in waterway_parts]  # named centerlines first
-             + [("water", n or "water", g) for n, g in water_comps])
+             + [("water", n, g) for n, g in waterway_parts]  # named centerlines
+             + [("waterbody", n or "water", g) for n, g in water_comps])
     tree = STRtree([g for _, _, g in feats])
 
     BORDER_STYLE = {
@@ -252,44 +268,76 @@ def main():
         "rail": ("#8a5fbf", ' stroke-dasharray="12 7"'),
         "path": ("#2f8f4e", ""),
         "water": ("#3f7fbf", ""),
+        "waterbody": ("#3f7fbf", ""),
         None: ("#b0a898", ' stroke-dasharray="2 7"'),  # nothing on the ground
     }
+    ABBREV = {"Street": "St", "Avenue": "Ave", "Boulevard": "Blvd",
+              "Highway": "Hwy", "Parkway": "Pkwy", "Road": "Rd"}
+
+    def label_that_fits(name: str, length: float) -> str | None:
+        if est_width(name, 13) * 1.15 <= length:
+            return name
+        short = " ".join(ABBREV.get(w, w) for w in name.split())
+        return short if est_width(short, 13) * 1.15 <= length else None
     L7 = layer("L7_boundaries")
     L7.raw(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
            f'stroke="#3a3a3a" stroke-width="4" opacity="0.35"/>')
 
-    def draw_border(seg, width=3.0):
-        kind, fname, fgeom = classify(seg, feats, tree)
+    def draw_run(run, kind, fname, fgeom, width):
+        """One contiguous border run with a single classification."""
         color, dash = BORDER_STYLE[kind]
+        # the demarcating feature: draw its real geometry near the border
+        # (a census-block border zigzags along a rail corridor; the train
+        # doesn't) — water bodies/unmatched keep the border line itself.
+        # Flat caps keep the feature from overshooting the run's ends.
+        if kind in ("street", "rail", "path", "water"):
+            stroke = _clean_lines(fgeom.intersection(run.buffer(24, cap_style="flat")))
+        else:
+            stroke = run
+        if stroke is None:
+            return
+        parts = [p for p in getattr(stroke, "geoms", [stroke])
+                 if isinstance(p, LineString)]
+        for part in parts:
+            L7.raw(f'<path d="{path_d(part.simplify(1).coords)}" fill="none" '
+                   f'stroke="{color}" stroke-width="{width}"{dash}/>')
+        if fname and parts:
+            longest = max(parts, key=lambda p: p.length)
+            label = label_that_fits(fname, longest.length)
+            if label:
+                coords = list(longest.simplify(1).coords)
+                if coords[-1][0] < coords[0][0]:
+                    coords.reverse()
+                L7.text_on_path(path_d(coords), label,
+                                {**LAYERS["border_label"], "fill": color},
+                                start_offset="50%")
+
+    def draw_border(seg, width=3.0):
         # the administrative line itself, always, as a hairline
         for part in getattr(seg, "geoms", [seg]):
             if isinstance(part, LineString):
                 L7.raw(f'<path d="{path_d(part.coords)}" fill="none" '
                        f'stroke="#b0a898" stroke-width="1.2"/>')
-        # the demarcating feature: draw its real geometry near the border
-        # (a census-block border zigzags along a rail corridor; the train
-        # doesn't) — water/unmatched keep the border line itself
-        if kind in ("street", "rail", "path"):
-            stroke = _clean_lines(fgeom.intersection(seg.buffer(24)))
-        else:
-            stroke = seg
-        if stroke is None:
-            return
-        for part in getattr(stroke, "geoms", [stroke]):
-            if isinstance(part, LineString):
-                L7.raw(f'<path d="{path_d(part.simplify(1).coords)}" fill="none" '
-                       f'stroke="{color}" stroke-width="{width}"{dash}/>')
-        if fname:
-            longest = max((p for p in getattr(stroke, "geoms", [stroke])
-                           if isinstance(p, LineString)),
-                          key=lambda p: p.length, default=None)
-            if longest and longest.length > est_width(fname, 13) * 1.3:
-                coords = list(longest.simplify(1).coords)
-                if coords[-1][0] < coords[0][0]:
-                    coords.reverse()
-                L7.text_on_path(path_d(coords), fname,
-                                {**LAYERS["border_label"], "fill": color},
-                                start_offset="50%")
+        # classify piecewise: a long frontage may run along water for a
+        # stretch and a street for the next — group equal chunks into runs
+        for part in getattr(seg, "geoms", [seg]):
+            if not isinstance(part, LineString) or part.length < 20:
+                continue
+            pieces = split_chunks(part)
+            verdicts = [classify(p, feats, tree) for p in pieces]
+            i = 0
+            while i < len(pieces):
+                j = i
+                while (j + 1 < len(pieces)
+                       and verdicts[j + 1][:2] == verdicts[i][:2]):
+                    j += 1
+                run = linemerge(MultiLineString(pieces[i:j + 1])) \
+                    if j > i else pieces[i]
+                if isinstance(run, MultiLineString):
+                    run = max(run.geoms, key=lambda g: g.length)
+                kind, fname, fgeom = verdicts[i]
+                draw_run(run, kind, fname, fgeom, width)
+                i = j + 1
 
     # interior borders: neighborhood vs neighborhood
     for na, nb, seg in shared_borders(hoods_pg, tol=8):

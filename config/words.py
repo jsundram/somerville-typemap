@@ -39,7 +39,14 @@ RAIL_RENAME = {
     "Fitchburg Route": "Fitchburg Line",
     "Fitchburg Route Main Line": "Fitchburg Line",
     "Eastern Route": "Eastern Line",
+    "B&A Eastbound": "Grand Junction",
+    "B&A Westbound": "Grand Junction",
+    "Green Line (D)": "Green Line",
+    "Green Line (E)": "Green Line",
 }
+
+# When an unnamed track could inherit from several lines, prefer these.
+RAIL_MAINLINES = ["Fitchburg Line", "Lowell Line", "Eastern Line", "Green Line"]
 
 # The greenway spine: the Community Path and its continuations past Davis
 # toward Alewife and Arlington. Rendered across the whole frame (other

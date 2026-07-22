@@ -6,12 +6,18 @@ then styles the border by demarcation kind and labels it with the
 feature's name — so the map explains *why* the line is where it is.
 """
 
+import math
+
 from shapely import STRtree
 from shapely.geometry import LineString, MultiLineString
-from shapely.ops import linemerge
+from shapely.ops import linemerge, substring
 
-# Priority when overlap ratios tie: water beats rail beats path beats street.
-KIND_PRIORITY = {"water": 3, "rail": 2, "path": 1, "street": 0}
+# Priority among features that qualify as "running along" a border.
+# Waterway centerlines beat merged water bodies (a body's buffer matches
+# anything near the bank; the centerline carries the local name — Alewife
+# Brook, not the Mystic it drains into). A path beats the rail line it
+# was built beside; both beat the street grid.
+KIND_PRIORITY = {"water": 4, "waterbody": 3, "path": 2, "rail": 1, "street": 0}
 
 
 def shared_borders(regions, tol: float = 3.0):
@@ -43,20 +49,36 @@ def _clean_lines(geom):
 
 
 def classify(border, features, tree: STRtree, tol: float = 14,
-             min_ratio: float = 0.45):
+             min_ratio: float = 0.45, qualify: float = 0.55):
     """Which feature runs along `border`?
 
     features: [(kind, name, geom)] indexed by `tree` over `geoms`.
+    Any feature covering ≥ `qualify` of the border "runs along" it — among
+    those, KIND_PRIORITY picks (so the Community Path beats the Lowell
+    Line it parallels). Below that, best coverage ≥ `min_ratio` wins.
     Returns (kind, name, matched_geom) or (None, "", None).
     """
-    best = (None, "", None)
-    best_score = 0.0
+    qualified, fallback = [], []
     for idx in tree.query(border.buffer(tol)):
         kind, name, geom = features[idx]
         ratio = border.intersection(geom.buffer(tol)).length / border.length
-        if ratio < min_ratio:
-            continue
-        score = ratio + KIND_PRIORITY[kind] * 0.001  # priority as tie-break
-        if score > best_score:
-            best, best_score = (kind, name, geom), score
-    return best
+        if ratio >= qualify:
+            qualified.append((KIND_PRIORITY[kind], ratio, kind, name, geom))
+        elif ratio >= min_ratio:
+            fallback.append((ratio, KIND_PRIORITY[kind], kind, name, geom))
+    if qualified:
+        _, _, kind, name, geom = max(qualified, key=lambda q: (q[0], q[1]))
+        return kind, name, geom
+    if fallback:
+        _, _, kind, name, geom = max(fallback, key=lambda q: (q[0], q[1]))
+        return kind, name, geom
+    return None, "", None
+
+
+def split_chunks(line: LineString, max_len: float = 220.0) -> list[LineString]:
+    """Cut a polyline into ≈equal pieces no longer than `max_len`, so a
+    border that runs along water for a while and then inland classifies
+    piecewise instead of all-or-nothing."""
+    n = max(1, math.ceil(line.length / max_len))
+    step = line.length / n
+    return [substring(line, k * step, (k + 1) * step) for k in range(n)]
