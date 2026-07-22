@@ -31,11 +31,15 @@ HERE = Path(__file__).parent
 HERO_STYLE = {
     "font_family": "Arial Rounded MT Bold, Cooper Black, Chalkboard SE, sans-serif",
     "font_weight": "900",
-    "fill": "#111111",
+    # dark gray, still luminance < 128 so measure.py counts it as ink
+    "fill": "#333333",
     "font_size": 40,  # overwritten by the algorithm
 }
 
 FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf"
+
+# taste rule: names that may break mid-word into close separate words
+SPLITS = {"HILLSIDE": "HILL SIDE"}
 
 
 def algo_baseline(doc, polygon, name):
@@ -197,7 +201,7 @@ def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
         score = sum(r["size"] ** 2 * len(r["line"]) for r in rows)
         return rows, score
 
-    words = name.upper().split()
+    words = SPLITS.get(name.upper(), name.upper()).split()
     best = None
     for n in range(1, min(len(words), 3) + 1):
         for lines in _partitions(words, n):
@@ -302,7 +306,7 @@ class _WarpPen:
                                             self.fn(t.transformPoint(pt))))
 
 
-def algo_envelope(doc, polygon, name, margin=3.0, max_ratio=2.5):
+def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
     """Per-line envelope stretch: perline's layout, glyphs as outlines,
     vertically warped to the polygon's local height. The vertical scale
     is sampled at every glyph's advance edges and midpoint (samples are
@@ -371,7 +375,7 @@ def algo_envelope(doc, polygon, name, margin=3.0, max_ratio=2.5):
         # window along the baseline with readable vertical room and fit
         # the text there (user notes: the T in TEELE, HILLSIDE's tail —
         # a crushed end glyph is worse than a slightly shorter line)
-        h_min = 0.5 * s
+        h_min = 0.45 * s
         for _ in range(2):
             N = 24
             xs = [w_nat * j / (N - 1) for j in range(N)]
@@ -389,12 +393,12 @@ def algo_envelope(doc, polygon, name, margin=3.0, max_ratio=2.5):
             if best[1] <= best[0]:
                 break
             x_lo, x_hi = xs[best[0]], xs[best[1]]
-            # never trim below 60% of the natural width — a short readable
+            # never trim below 70% of the natural width — a short readable
             # line beats a long crushed one, but not by that much
-            if x_hi - x_lo < 0.6 * w_nat:
+            if x_hi - x_lo < 0.7 * w_nat:
                 mid_w = (x_lo + x_hi) / 2
-                x_lo = max(0.0, mid_w - 0.3 * w_nat)
-                x_hi = min(w_nat, x_lo + 0.6 * w_nat)
+                x_lo = max(0.0, mid_w - 0.35 * w_nat)
+                x_hi = min(w_nat, x_lo + 0.7 * w_nat)
             if x_lo <= 0.0 and x_hi >= w_nat:
                 break
             shift = ((x_lo + x_hi) / 2 - w_nat / 2) * sx
@@ -437,6 +441,18 @@ def algo_envelope(doc, polygon, name, margin=3.0, max_ratio=2.5):
                 tops = [min(t, lo * 1.6) for t in tops]
                 bots = [-d + (u + d - (gy1 - g_lo) * t) / 2
                         for u, d, t in zip(ups, dns, tops)]
+                # de-skew: cap the baseline tilt inside one glyph (user
+                # calls: T in TEELE, R in PORTER, U in Union's SQUARE) —
+                # the word may ride a wavy baseline, but each letter
+                # stays upright, not sheared into a parallelogram
+                if len(bots) > 1:
+                    mean_b = sum(bots) / len(bots)
+                    dev = 0.10 * adv * sx  # ≈ ±11° across the glyph
+                    bots = [min(max(b, mean_b - dev), mean_b + dev)
+                            for b in bots]
+                    bots = [max(b, -d) for b, d in zip(bots, dns)]
+                    tops = [max(min(t, (u - b) / (gy1 - g_lo)), 0.02 * sx)
+                            for t, u, b in zip(tops, ups, bots)]
             if not knots:
                 # baseline sample outside the polygon: stay banded anyway
                 sy0 = min(s / upm, max_ratio * sx)
@@ -496,8 +512,9 @@ def main():
         bx0, by0, bx1, by1 = cell_poly.bounds
         cell_poly = translate(cell_poly, (CELL - (bx1 - bx0)) / 2 - (bx0 - cx),
                               (CELL - (by1 - by0)) / 2 - (by0 - cy))
+        # border at luminance ≥ 128 (#999) so measure.py never counts it
         doc.raw(f'<path d="{" ".join(polygon_ds(cell_poly))}" fill="none" '
-                f'stroke="#dddddd" stroke-width="1.5" fill-rule="evenodd"/>')
+                f'stroke="#999999" stroke-width="3" fill-rule="evenodd"/>')
         algo(doc, cell_poly, f["name"])
         doc.raw(f'<text x="{cx + 8}" y="{cy + 16}" font-size="12" '
                 f'font-family="monospace" fill="#999999">{f["name"]}</text>')
