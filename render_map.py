@@ -25,7 +25,7 @@ from shapely.ops import linemerge, transform, unary_union
 from config.style import HERO_CYCLE, LAYERS, PAPER
 from config.words import (LINE_COLORS, PATH_FAMILY, RAIL_RENAME, STATION_LINES,
                           TOWNS, WORD_OVERRIDES)
-from typemap.borders import classify, shared_borders
+from typemap.borders import _clean_lines, classify, shared_borders
 from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
 from typemap.osm import load_layers, _relation_polygon
@@ -167,6 +167,8 @@ def main():
                 path_parts.append((name, line))
                 if line.length > est_width(name, 13):
                     street_label(L3, line, name, LAYERS["path"], sep="  »  ")
+                elif line.length > 30:  # too short for the name: show continuity
+                    street_label(L3, line, "»", LAYERS["path"], sep="  ")
     seen = set()
     for name, pt in osm["stations"]:
         if name not in STATION_LINES or name in seen:
@@ -254,18 +256,15 @@ def main():
     }
     L7 = layer("L7_boundaries")
     L7.raw(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
-           f'stroke="#3a3a3a" stroke-width="4" opacity="0.5"/>')
-    hood_names = {n for n, _ in hoods_pg}
-    regions_all = hoods_pg + [(d, g) for d, _, g in towns_pg]
-    for na, nb, seg in shared_borders(regions_all, tol=8):
-        if na not in hood_names and nb not in hood_names:
-            continue  # town-town borders out in the fringe aren't our story
+           f'stroke="#3a3a3a" stroke-width="4" opacity="0.35"/>')
+
+    def draw_border(seg, width=3.0):
         kind, fname = classify(seg, feats, tree)
         color, dash = BORDER_STYLE[kind]
         for part in getattr(seg, "geoms", [seg]):
             if isinstance(part, LineString):
                 L7.raw(f'<path d="{path_d(part.coords)}" fill="none" '
-                       f'stroke="{color}" stroke-width="3"{dash}/>')
+                       f'stroke="{color}" stroke-width="{width}"{dash}/>')
         if fname:
             longest = max((p for p in getattr(seg, "geoms", [seg])
                            if isinstance(p, LineString)),
@@ -277,6 +276,18 @@ def main():
                 L7.text_on_path(path_d(coords), fname,
                                 {**LAYERS["border_label"], "fill": color},
                                 start_offset="50%")
+
+    # interior borders: neighborhood vs neighborhood
+    for na, nb, seg in shared_borders(hoods_pg, tol=8):
+        draw_border(seg)
+    # exterior borders: each neighborhood's frontage on the city limit —
+    # classified the same way (the Mystic frontage reads as water, the
+    # Cambridge line as the street it follows, …)
+    city_edge = city_pg.boundary.buffer(3)
+    for name, geom in hoods_pg:
+        seg = _clean_lines(geom.boundary.intersection(city_edge))
+        if seg is not None and seg.length > 30:
+            draw_border(seg, width=4.0)
 
     # ── L5 neighborhood hero typography (fitted, not just a curve)
     L5 = layer("L5_heroes")

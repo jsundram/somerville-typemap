@@ -29,6 +29,7 @@ QUERY = f"""
 (
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|pedestrian)$"]["name"];
   way["highway"="cycleway"];
+  way["highway"~"^(path|footway)$"]["name"];
   way["leisure"~"^(park|garden|playground|common)$"];
   relation["leisure"="park"];
   way["landuse"~"^(recreation_ground|cemetery|grass)$"];

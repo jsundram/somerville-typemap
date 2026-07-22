@@ -52,6 +52,30 @@ Iterate: implement an algorithm in `render_sheet.py`'s `ALGORITHMS` dict,
 re-run, compare the table + eyeball the sheet. Keep the best per-shape
 numbers in this README as you go.
 
+## How to check in / steer
+
+The contact sheet is the review surface and this README is the steering
+wheel — no code required to guide the work:
+
+1. **Look at `sheet.svg`** (or the PNG) after any run. Every judgment
+   call is visible there on all 19 real shapes at once.
+2. **Adjust the bars** in the success-criteria table — e.g. raise
+   coverage to 45%, tighten the distortion bound if letters look mushy,
+   or add per-shape notes ("Hillside may split its name across the two
+   legs of the L", "North Point may abbreviate to NORTH PT").
+3. **Annotate the results log** — a row per run keeps the history; add a
+   `verdict` note per run (ship it / too distorted / try X).
+4. **Rules of taste** belong here too, as bullets the algorithms must
+   honor (e.g. "never rotate letters within a word by more than ±20°",
+   "prefer fewer, bigger lines over more, smaller ones").
+
+Anything written here is treated as the spec on the next iteration.
+
+## Taste rules (edit freely)
+
+- Reading order must survive: top line first, left to right.
+- A stretched letter should still look like the same typeface, not a balloon.
+
 ## Results log
 
 | Date | Algorithm | Median coverage | Max spill | Notes |

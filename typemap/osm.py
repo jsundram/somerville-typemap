@@ -45,7 +45,9 @@ def load_layers(data: dict) -> dict:
             closed = coords[0] == coords[-1] and len(coords) >= 4
             if tags.get("railway") in ("rail", "light_rail"):
                 rails.append((tags.get("name", ""), LineString(coords)))
-            elif hwy == "cycleway":
+            elif hwy in ("cycleway", "path", "footway"):
+                # named paths/footways included: the Community Path crosses
+                # Davis Square plaza as a footway, not a cycleway
                 cycleways.append((tags.get("name", ""), LineString(coords)))
             elif hwy and tags.get("name"):
                 cls = "major" if hwy in MAJOR else "mid" if hwy in MID else "minor"
