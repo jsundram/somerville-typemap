@@ -8,8 +8,9 @@ extent it truly demarcates, and never appear where it doesn't belong.
 
 ```sh
 uv run render_map.py                      # emits out/borders_debug.json as a side effect
-uv run experiments/borders/measure.py     # metrics table + worst offenders
+uv run experiments/borders/measure.py     # metrics table + worst offenders → measure.txt
 uv run experiments/borders/sheet.py       # closeup SVG of the N worst runs → sheet.svg
+uv run experiments/borders/build_review.py  # review.html for the artifact
 ```
 
 `out/borders_debug.json` records every annotated run: the border pair
@@ -25,6 +26,12 @@ lengths, and sampled mean/max deviation between annotation and border.
 | max deviation, any accepted stroke | ≤ 45 px street / 60 px rail |
 | annotated coverage (non-"nothing" length / total border length) | ≥ 70% — but never by faking: an annotation must be real |
 | stray annotations (stroke where no border sits within slack) | 0 |
+| missed annotations (border run riding a basemap street/path/rail but rendered "nothing", or labeled for less than its true extent) | 0 |
+
+The two zero-bars are the ship criteria (user, 2026-07-22): **no label
+that doesn't match up with a border, and no border overlapping a basemap
+feature that goes unlabeled.** 100% coverage is not required — some
+border segments follow nothing and should stay bare.
 
 The renderer's acceptance thresholds live in `render_map.py`
 (`draw_run`: `mean_cap`, `slack`, kept-ratio) — tune them against these
