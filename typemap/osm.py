@@ -32,7 +32,7 @@ def _relation_polygon(el):
 def load_layers(data: dict) -> dict:
     """Overpass JSON → {'streets', 'cycleways', 'parks', 'water', 'stations'}."""
     streets = {}  # name -> {"cls": best class, "segs": [LineString]}
-    cycleways, parks, water, stations, waterways = [], [], [], [], []
+    cycleways, parks, water, stations, waterways, rails = [], [], [], [], [], []
     rank = {"minor": 0, "mid": 1, "major": 2}
 
     for el in data["elements"]:
@@ -43,7 +43,9 @@ def load_layers(data: dict) -> dict:
                 continue
             hwy = tags.get("highway")
             closed = coords[0] == coords[-1] and len(coords) >= 4
-            if hwy == "cycleway":
+            if tags.get("railway") in ("rail", "light_rail"):
+                rails.append((tags.get("name", ""), LineString(coords)))
+            elif hwy == "cycleway":
                 cycleways.append((tags.get("name", ""), LineString(coords)))
             elif hwy and tags.get("name"):
                 cls = "major" if hwy in MAJOR else "mid" if hwy in MID else "minor"
@@ -86,8 +88,9 @@ def load_layers(data: dict) -> dict:
          poly)
         for name, poly in water
     ]
-    return {"streets": merged_streets, "cycleways": cycleways,
-            "parks": parks, "water": water, "stations": stations}
+    return {"streets": merged_streets, "cycleways": cycleways, "parks": parks,
+            "water": water, "stations": stations, "rails": rails,
+            "waterways": waterways}
 
 
 def _center(el) -> Point:

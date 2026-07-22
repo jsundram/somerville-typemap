@@ -32,6 +32,28 @@ LINE_COLORS = {"red": "#da291c", "orange": "#ed8b00", "green": "#00843d"}
 # Stations rendered even though the point sits just outside the city clip.
 STATION_KEEP = set(STATION_LINES)
 
+# OSM names rail corridors by route; locals name them by line.
+RAIL_RENAME = {
+    "New Hampshire Route": "Lowell Line",
+    "New Hampshire Route Main Line": "Lowell Line",
+    "Fitchburg Route": "Fitchburg Line",
+    "Fitchburg Route Main Line": "Fitchburg Line",
+    "Eastern Route": "Eastern Line",
+}
+
+# The greenway spine: the Community Path and its continuations past Davis
+# toward Alewife and Arlington. Rendered across the whole frame (other
+# named cycleways are ignored — this layer is about the path, not every
+# bike lane).
+PATH_FAMILY = [
+    "Somerville Community Path",
+    "Community Path",
+    "Alewife Linear Park",
+    "Minuteman/Linear Park Connector",
+    "Minuteman Bikeway",
+    "Alewife Brook Greenway",
+]
+
 # Adjacent municipalities (rainbow-map style color blocks around the city).
 # Only towns listed here are rendered. display: what the label says —
 # within our frame Boston's visible sliver is Charlestown.

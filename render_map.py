@@ -18,11 +18,14 @@ import json
 from pathlib import Path
 
 from pyproj import Transformer
+from shapely import STRtree
 from shapely.geometry import LineString, MultiLineString, shape
 from shapely.ops import linemerge, transform, unary_union
 
 from config.style import HERO_CYCLE, LAYERS, PAPER
-from config.words import LINE_COLORS, STATION_LINES, TOWNS, WORD_OVERRIDES
+from config.words import (LINE_COLORS, PATH_FAMILY, RAIL_RENAME, STATION_LINES,
+                          TOWNS, WORD_OVERRIDES)
+from typemap.borders import classify, shared_borders
 from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
 from typemap.osm import load_layers, _relation_polygon
@@ -144,20 +147,25 @@ def main():
                  "fill": hood_color[name], "opacity": 0.45}
         linepack_fill(L2, geom.simplify(2), words, style, leading=1.6)
 
-    # ── L3 transit: Community Path + T stations
+    # ── L3 transit: the path family (Community Path and its continuations
+    # past Davis: Alewife Linear Park, Minuteman Bikeway) + T stations
     L3 = layer("L3_transit")
     named_paths = {}
     for name, line in osm["cycleways"]:
-        if name:
+        if name in PATH_FAMILY:
             named_paths.setdefault(name, []).append(line)
+    path_parts = []  # kept for border classification below
     for name, segs in named_paths.items():
         merged = unary_union([ll_to_page(s) for s in segs])
         if isinstance(merged, MultiLineString):
             merged = linemerge(merged)
         for part in getattr(merged, "geoms", [merged]):
-            part = part.simplify(1.5).intersection(street_clip)
+            part = part.simplify(1.5).intersection(frame)
             for line in getattr(part, "geoms", [part]):
-                if isinstance(line, LineString) and line.length > est_width(name, 13):
+                if not isinstance(line, LineString):
+                    continue
+                path_parts.append((name, line))
+                if line.length > est_width(name, 13):
                     street_label(L3, line, name, LAYERS["path"], sep="  »  ")
     seen = set()
     for name, pt in osm["stations"]:
@@ -186,14 +194,89 @@ def main():
                     {**LAYERS["hero"], "fill": color, "opacity": 0.85},
                     max_size=72, cram=0.5)
 
-    # ── L7 boundaries: city outline + neighborhood borders
+    # ── shared feature preprocessing (used by L7 classification and L6)
+    street_parts = []
+    for name, cls, line in osm["streets"]:
+        g = ll_to_page(line).simplify(1.5).intersection(frame)
+        for part in getattr(g, "geoms", [g]):
+            if isinstance(part, LineString):
+                street_parts.append((name, cls, part))
+
+    rails_grouped = {}
+    for name, line in osm["rails"]:
+        rails_grouped.setdefault(RAIL_RENAME.get(name, name), []).append(line)
+    rail_parts = []
+    for name, segs in rails_grouped.items():
+        merged = unary_union([ll_to_page(s) for s in segs])
+        if isinstance(merged, MultiLineString):
+            merged = linemerge(merged)
+        for part in getattr(merged, "geoms", [merged]):
+            p = part.simplify(1.5).intersection(frame)
+            for line in getattr(p, "geoms", [p]):
+                if isinstance(line, LineString) and line.length > 40:
+                    rail_parts.append((name or "rail line", line))
+
+    water_pg = []
+    for name, geom in osm["water"]:
+        g = ll_to_page(geom).intersection(frame)
+        if not g.is_empty and g.area >= 900:
+            water_pg.append((name, g))
+    merged_water = unary_union([g for _, g in water_pg])
+    water_comps = []
+    for comp in getattr(merged_water, "geoms", [merged_water]):
+        if comp.area < 900:
+            continue
+        wname = next((n for n, g in sorted(water_pg, key=lambda w: -w[1].area)
+                      if n and g.intersects(comp)), "")
+        water_comps.append((wname, comp))
+
+    # ── L7 boundaries: styled + labeled by what physically demarcates them
+    waterway_parts = []
+    for name, line in osm["waterways"]:
+        g = ll_to_page(line).simplify(1.5).intersection(frame)
+        for part in getattr(g, "geoms", [g]):
+            if isinstance(part, LineString) and part.length > 40:
+                waterway_parts.append((name, part))
+
+    feats = ([("street", n, g) for n, _, g in street_parts]
+             + [("rail", n, g) for n, g in rail_parts]
+             + [("path", n, g) for n, g in path_parts]
+             + [("water", n, g) for n, g in waterway_parts]  # named centerlines first
+             + [("water", n or "water", g) for n, g in water_comps])
+    tree = STRtree([g for _, _, g in feats])
+
+    BORDER_STYLE = {
+        "street": ("#3a3a3a", ""),
+        "rail": ("#8a5fbf", ' stroke-dasharray="12 7"'),
+        "path": ("#2f8f4e", ""),
+        "water": ("#3f7fbf", ""),
+        None: ("#b0a898", ' stroke-dasharray="2 7"'),  # nothing on the ground
+    }
     L7 = layer("L7_boundaries")
-    borders = [f'<path d="{" ".join(polygon_ds(geom))}" fill="none" '
-               f'stroke="#8a8378" stroke-width="2" stroke-dasharray="7 5"/>'
-               for _, geom in hoods_pg]
-    borders.append(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
-                   f'stroke="#3a3a3a" stroke-width="5"/>')
-    L7.group(borders)
+    L7.raw(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
+           f'stroke="#3a3a3a" stroke-width="4" opacity="0.5"/>')
+    hood_names = {n for n, _ in hoods_pg}
+    regions_all = hoods_pg + [(d, g) for d, _, g in towns_pg]
+    for na, nb, seg in shared_borders(regions_all, tol=8):
+        if na not in hood_names and nb not in hood_names:
+            continue  # town-town borders out in the fringe aren't our story
+        kind, fname = classify(seg, feats, tree)
+        color, dash = BORDER_STYLE[kind]
+        for part in getattr(seg, "geoms", [seg]):
+            if isinstance(part, LineString):
+                L7.raw(f'<path d="{path_d(part.coords)}" fill="none" '
+                       f'stroke="{color}" stroke-width="3"{dash}/>')
+        if fname:
+            longest = max((p for p in getattr(seg, "geoms", [seg])
+                           if isinstance(p, LineString)),
+                          key=lambda p: p.length, default=None)
+            if longest and longest.length > est_width(fname, 13) * 1.3:
+                coords = list(longest.simplify(1).coords)
+                if coords[-1][0] < coords[0][0]:
+                    coords.reverse()
+                L7.text_on_path(path_d(coords), fname,
+                                {**LAYERS["border_label"], "fill": color},
+                                start_offset="50%")
 
     # ── L5 neighborhood hero typography (fitted, not just a curve)
     L5 = layer("L5_heroes")
@@ -216,7 +299,9 @@ def main():
     parks_pg = []
     for name, geom in osm["parks"]:
         g = ll_to_page(geom).intersection(city_pg)
-        if not g.is_empty and g.area >= 900:
+        # an area feature earns a text fill only if it could hold at least
+        # one row of park text — kills median strips and traffic islands
+        if not g.is_empty and g.area >= 900 and not g.buffer(-7).is_empty:
             parks_pg.append((name, g))
     parks_pg.sort(key=lambda p: -p[1].area)
     parks_kept = []
@@ -231,19 +316,8 @@ def main():
         words = WORD_OVERRIDES.get(name, [name.lower() if name else "park"])
         linepack_fill(L6, fill_geom.simplify(2), words, LAYERS["park_fill"])
 
-    # Water: union overlapping polygons (ways + relations often double-map
-    # the same river) and contour each merged component once.
-    water_pg = []
-    for name, geom in osm["water"]:
-        g = ll_to_page(geom).intersection(frame)
-        if not g.is_empty and g.area >= 900:
-            water_pg.append((name, g))
-    merged_water = unary_union([g for _, g in water_pg])
-    for comp in getattr(merged_water, "geoms", [merged_water]):
-        if comp.area < 900:
-            continue
-        name = next((n for n, g in sorted(water_pg, key=lambda w: -w[1].area)
-                     if n and g.intersects(comp)), "")
+    # Water: merged components (deduped way+relation double-mapping above)
+    for name, comp in water_comps:
         words = WORD_OVERRIDES.get(name, [name.upper() if name else "water ~"])
         contour_fill(L6, comp.simplify(2), " ".join(words), LAYERS["water_fill"])
 
@@ -251,11 +325,11 @@ def main():
     # runs parallel within a few px of an already-labeled longer one.
     order = {"minor": 0, "mid": 1, "major": 2}
     by_name = {}
-    for name, cls, line in osm["streets"]:
-        g = ll_to_page(line).simplify(1.5).intersection(street_clip)
-        for part in getattr(g, "geoms", [g]):
-            if isinstance(part, LineString):
-                by_name.setdefault((name, cls), []).append(part)
+    for name, cls, part in street_parts:
+        g = part.intersection(street_clip)
+        for p in getattr(g, "geoms", [g]):
+            if isinstance(p, LineString):
+                by_name.setdefault((name, cls), []).append(p)
     for (name, cls), parts in sorted(by_name.items(), key=lambda kv: order[kv[0][1]]):
         style = LAYERS[f"street_{cls}"]
         parts.sort(key=lambda p: -p.length)

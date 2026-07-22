@@ -35,6 +35,7 @@ QUERY = f"""
   way["natural"="water"];
   relation["natural"="water"];
   way["waterway"~"^(river|stream|canal)$"];
+  way["railway"~"^(rail|light_rail)$"];
   nwr["railway"="station"];
   nwr["public_transport"="station"];
 );
@@ -49,7 +50,8 @@ def summarize(data: dict) -> None:
     stations = []
     for el in data["elements"]:
         tags = el.get("tags", {})
-        if tags.get("name") and ("railway" in tags or "public_transport" in tags) and tags.get("railway") != "abandoned":
+        if tags.get("name") and (tags.get("railway") == "station"
+                                 or tags.get("public_transport") == "station"):
             stations.append(tags["name"])
         for key in ("highway", "leisure", "landuse", "natural", "waterway"):
             if key in tags:

@@ -95,6 +95,17 @@ LAYERS = {
         "stroke_width": 4,
         "paint_order": "stroke",
     },
+    # Labels naming what a neighborhood border runs along
+    "border_label": {
+        "font_size": 13,
+        "font_family": BODY_FONT,
+        "font_weight": "700",
+        "letter_spacing": 1,
+        "text_anchor": "middle",
+        "stroke": PAPER,
+        "stroke_width": 3.5,
+        "paint_order": "stroke",
+    },
     # Neighborhood hero labels — big, arched, layered over everything
     "hero": {
         "font_size": 58,

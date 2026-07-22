@@ -71,11 +71,16 @@ def main():
   #panel label {{ display:flex; align-items:baseline; gap:.5rem; cursor:pointer; font-size:.82rem; }}
   #panel label span {{ color:var(--dim); font-size:.72rem; margin-left:.3rem; }}
   #panel p {{ margin:.4rem 0 0; color:var(--dim); font-size:.72rem; }}
+  #legend {{ margin-top:.4rem; font-size:.72rem; color:var(--dim); }}
+  #legend i {{ font-style:normal; font-weight:700; margin-right:.45em; white-space:nowrap; }}
 </style>
 <div id="stage"><div id="map">{''.join(imgs)}</div></div>
 <div id="panel">
   <h1><b>somerville</b> typemap</h1>
   {''.join(boxes)}
+  <div id="legend">borders run along:<br>
+    <i style="color:#3a3a3a">— street</i><i style="color:#8a5fbf">╌ rail</i><i style="color:#2f8f4e">— path</i><i style="color:#3f7fbf">— water</i><i style="color:#b0a898">·· nothing</i>
+  </div>
   <p>scroll to zoom · drag to pan</p>
 </div>
 <script>
