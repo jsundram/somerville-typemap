@@ -93,6 +93,13 @@ Anything written here is treated as the spec on the next iteration.
   Belt ×2, TEN in Ten Hills).
 - No letter may be crushed unreadable at a taper — pull the line inward
   off sharp corners instead (user note 2026-07-22: the T in TEELE).
+- Letters stay upright: cap the baseline tilt *within* one glyph (~±11°)
+  — the word may ride a wavy baseline, but individual letters must not
+  shear into parallelograms (user calls 2026-07-22: T crossbar in TEELE,
+  first R in PORTER, the U in Union's SQUARE).
+- Hillside: try breaking the word — HILL and SIDE as two separate, very
+  close words (user suggestion 2026-07-22); escalate to FFD if that's
+  not enough.
 
 ## Results log
 
