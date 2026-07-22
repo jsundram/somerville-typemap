@@ -28,13 +28,19 @@ text.
 ## Layout
 
 ```
-typemap/            the engine: geometry, fills, SVG emission
+typemap/            the engine: fills, osm parsing, border classification, SVG emission
 config/             words, fonts, palette, type hierarchy — the iterate-here layer
 data/fixtures/      tiny hand-made geometries for engine development
-data/cache/         raw Overpass responses (network-tolerant cache)
-out/                rendered SVGs (not committed)
-render_fixture.py   renders the engine-proving fixture scene
+data/cache/         raw Overpass responses (committed: offline-reproducible builds)
+experiments/warp/   crammed hero-glyph sub-problem (own README, metrics, loop)
+experiments/borders/ boundary-annotation alignment loop (own README, metrics)
+out/                rendered SVGs + viewer (not committed)
 ```
+
+The map renders as eight toggleable layers (basemap, neighborhoods,
+transit, adjacent towns, heroes, road/park/water typography, boundary
+lines, boundary annotations) — `out/viewer.html` stacks them with
+checkboxes; `out/somerville.svg` is the combined print composite.
 
 ## Running
 

@@ -416,20 +416,27 @@ def algo_envelope(doc, polygon, name, margin=3.0, max_ratio=2.5):
             # into the full free span [-dn, +up]; samples sit at advance
             # edges + midpoint (edges are shared with the neighbors, so
             # tops AND bottoms form continuous curves)
-            knots, tops, bots = [], [], []
+            knots, ups, dns = [], [], []
             n_k = max(3, min(17, int(adv * sx / 8) + 2))  # dense on wide glyphs
             for j in range(n_k):
                 x_k = x_pen + adv * j / (n_k - 1)
                 room = up_dn_at(x_k)
                 if room is None:
                     continue
-                up_use, dn_use = room
-                sy = min((up_use + dn_use) / (gy1 - g_lo), max_ratio * sx)
-                extra = (up_use + dn_use) - (gy1 - g_lo) * sy
-                bot = -dn_use + extra / 2  # leftover splits evenly
                 knots.append(x_k)
-                tops.append(max(sy, 0.02 * sx))
-                bots.append(bot)
+                ups.append(room[0])
+                dns.append(room[1])
+            tops, bots = [], []
+            if knots:
+                tops = [max(min((u + d) / (gy1 - g_lo), max_ratio * sx),
+                            0.02 * sx) for u, d in zip(ups, dns)]
+                # glyph coherence: a letter is one shape — compress the
+                # tall side to ≤1.6× the short side instead of letting a
+                # taper crush half of it (user note: the T in TEELE)
+                lo = min(tops)
+                tops = [min(t, lo * 1.6) for t in tops]
+                bots = [-d + (u + d - (gy1 - g_lo) * t) / 2
+                        for u, d, t in zip(ups, dns, tops)]
             if not knots:
                 # baseline sample outside the polygon: stay banded anyway
                 sy0 = min(s / upm, max_ratio * sx)
