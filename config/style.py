@@ -53,6 +53,16 @@ LAYERS = {
         "stroke_width": 4,
         "paint_order": "stroke",
     },
+    "street_mid": {
+        "font_size": 14,
+        "font_family": BODY_FONT,
+        "font_weight": "600",
+        "fill": "#4a4a4a",
+        "letter_spacing": 0.5,
+        "stroke": PAPER,
+        "stroke_width": 3.5,
+        "paint_order": "stroke",
+    },
     "street_minor": {
         "font_size": 12,
         "font_family": BODY_FONT,
@@ -61,6 +71,28 @@ LAYERS = {
         "letter_spacing": 0.5,
         "stroke": PAPER,
         "stroke_width": 3,
+        "paint_order": "stroke",
+    },
+    # The Somerville Community Path
+    "path": {
+        "font_size": 13,
+        "font_family": BODY_FONT,
+        "font_weight": "600",
+        "fill": "#2f8f4e",
+        "letter_spacing": 1,
+        "stroke": PAPER,
+        "stroke_width": 3,
+        "paint_order": "stroke",
+    },
+    # T station labels (fill color comes from the line, see config/words.py)
+    "station": {
+        "font_size": 16,
+        "font_family": BODY_FONT,
+        "font_weight": "800",
+        "letter_spacing": 0.5,
+        "text_anchor": "middle",
+        "stroke": PAPER,
+        "stroke_width": 4,
         "paint_order": "stroke",
     },
     # Neighborhood hero labels — big, arched, layered over everything

@@ -16,7 +16,7 @@ control layering.
 
 from shapely.geometry import LineString, MultiPolygon, Polygon
 
-from .svgdoc import SvgDoc, path_d, repeat_to_length
+from .svgdoc import SvgDoc, est_width, path_d, repeat_to_length
 
 
 def _polygons(geom):
@@ -120,8 +120,13 @@ def arched_label(doc: SvgDoc, center: tuple[float, float], text: str, style: dic
     """A hero label on an upward-bulging arc centered at `center`.
 
     `width` is the chord length; `bulge` is arc height as a fraction of it.
-    Negative `bulge` arches downward.
+    Negative `bulge` arches downward. The chord is widened if needed so the
+    text always fits — glyphs past a path's end are silently dropped by SVG.
     """
+    size = style["font_size"]
+    ls = float(style.get("letter_spacing", 0))
+    needed = est_width(text, size) * 1.25 + ls * len(text)
+    width = max(width, needed)
     cx, cy = center
     x0, x1 = cx - width / 2, cx + width / 2
     # Quadratic Bézier through the apex: control point 2×bulge above chord.

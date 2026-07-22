@@ -65,6 +65,12 @@ class SvgDoc:
               f'{escape(text)}</textPath></text>')
         (group if group is not None else self._body).append(el)
 
+    def text(self, x: float, y: float, content: str, style: dict, group: list | None = None):
+        """A plain positioned label (e.g. station names)."""
+        el = (f'<text x="{x:.2f}" y="{y:.2f}" {style_attrs(style)}>'
+              f'{escape(content)}</text>')
+        (group if group is not None else self._body).append(el)
+
     def group(self, elements: list, clip_id: str | None = None, opacity: float | None = None):
         attrs = ""
         if clip_id:
