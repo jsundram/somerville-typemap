@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1680" viewBox="0 0 1680 1680">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<rect x="0" y="0" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 62.6,30.0 L 62.5,31.3 L 62.1,33.6 L 61.6,36.6 L 64.4,39.3 L 67.4,42.4 L 81.7,58.3 L 94.9,75.1 L 107.1,92.6 L 128.7,125.9 L 137.7,139.8 L 143.9,149.2 L 150.2,158.6 L 163.8,176.6 L 173.4,187.7 L 178.5,193.7 L 180.6,195.9 L 188.1,203.7 L 202.4,218.2 L 207.8,223.6 L 212.4,228.2 L 226.5,242.4 L 239.4,255.4 L 253.7,269.8 L 269.6,285.7 L 286.0,302.4 L 287.4,303.8 L 295.5,312.5 L 302.0,319.6 L 310.6,329.5 L 317.8,338.0 L 325.1,347.5 L 325.2,347.7 L 326.6,349.5 L 330.1,354.0 L 331.0,355.4 L 331.5,356.1 L 334.1,359.9 L 337.5,364.8 L 343.3,373.4 L 345.7,377.1 L 348.7,382.1 L 352.9,389.4 L 353.2,390.0 L 356.9,383.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 358.4,368.8 L 324.9,331.0 L 179.7,184.0 L 108.6,74.7 L 92.9,55.5 L 68.8,30.8" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="8" y="16" font-size="11" font-family="monospace" fill="#666666">Assembly Square | East Somerville</text>
+<text x="8" y="30" font-size="11" font-family="monospace" fill="#666666">street Mystic Avenue mean 11.2 max 17.1</text>
+<rect x="420" y="0" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 663.0,390.0 L 659.4,385.0 L 654.8,377.5 L 650.9,369.8 L 647.7,362.2 L 647.5,361.8 L 644.4,353.7 L 642.1,345.3 L 640.2,337.0 L 638.8,328.4 L 622.7,243.1 L 615.2,204.5 L 609.5,175.5 L 597.2,111.0 L 591.8,88.6 L 591.6,87.6 L 586.0,63.4 L 585.8,63.0 L 586.8,62.6 L 588.3,62.1 L 592.4,60.5 L 596.4,58.2 L 591.8,39.4 L 596.4,37.5 L 598.5,36.3 L 600.6,35.0 L 603.3,32.9 L 606.2,30.4 L 606.6,30.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 674.2,382.3 L 619.6,104.3 L 623.1,46.7" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="428" y="16" font-size="11" font-family="monospace" fill="#666666">Brickbottom | Union Square</text>
+<text x="428" y="30" font-size="11" font-family="monospace" fill="#666666">street McGrath Highway mean 10.6 max 11.7</text>
+<rect x="840" y="0" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1230.0,341.3 L 1223.0,355.1 L 1222.6,354.9 L 1165.5,321.9 L 1109.3,280.1 L 1028.0,208.2 L 1021.6,201.5 L 999.8,178.4 L 967.0,142.3 L 951.3,122.8 L 907.1,52.6 L 903.6,47.2 L 890.8,72.3 L 887.3,79.3 L 880.3,93.9 L 870.0,114.3" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1216.2,372.8 L 1152.4,344.8 L 1112.0,317.0 L 1050.8,262.2 L 1032.9,232.3 L 918.2,117.8 L 881.1,94.6 L 877.8,93.5" fill="none" stroke="#2f8f4e" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="848" y="16" font-size="11" font-family="monospace" fill="#666666">Magoun Square | Spring Hill</text>
+<text x="848" y="30" font-size="11" font-family="monospace" fill="#666666">path Somerville Community Path mean 9.7 max 14.0</text>
+<rect x="1260" y="0" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1297.8,97.8 L 1310.1,104.9 L 1310.4,105.0 L 1347.4,126.6 L 1424.0,172.7 L 1472.6,202.1 L 1480.4,206.8 L 1650.0,309.1 L 1643.4,322.2" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1623.9,314.2 L 1451.4,205.9 L 1411.6,186.6 L 1305.5,122.4 L 1290.0,115.4" fill="none" stroke="#2f8f4e" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="1268" y="16" font-size="11" font-family="monospace" fill="#666666">Spring Hill | Winter Hill</text>
+<text x="1268" y="30" font-size="11" font-family="monospace" fill="#666666">path Somerville Community Path mean 9.4 max 10.6</text>
+<rect x="0" y="420" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 390.0,750.4 L 374.7,724.6 L 374.7,724.3 L 374.4,724.0 L 374.1,723.7 L 374.1,723.7 L 373.7,723.4 L 373.4,723.4 L 373.1,723.1 L 372.8,723.1 L 248.6,685.0 L 229.9,676.1 L 220.1,662.7 L 208.5,637.8 L 208.5,637.5 L 208.2,637.5 L 208.2,637.2 L 207.9,636.9 L 195.0,625.2 L 194.7,624.9 L 194.4,624.9 L 174.7,613.6 L 174.7,613.3 L 121.4,587.5 L 72.0,549.5 L 34.0,506.9" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 30.0,514.9 L 201.1,597.3 L 261.8,753.1" fill="none" stroke="#3f7fbf" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="8" y="436" font-size="11" font-family="monospace" fill="#666666">Assembly Square | city limit</text>
+<text x="8" y="450" font-size="11" font-family="monospace" fill="#666666">water Mystic River mean 8.4 max 20.0</text>
+<rect x="420" y="420" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 747.8,808.0 L 743.2,809.3 L 740.7,810.0 L 733.0,800.9 L 733.0,800.7 L 731.2,798.4 L 719.4,784.6 L 707.6,770.7 L 630.8,680.1 L 628.3,677.4 L 642.8,669.0 L 684.2,645.1 L 686.7,643.7 L 681.2,637.8 L 512.2,454.3 L 517.7,450.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 723.2,670.8 L 541.8,472.9" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="428" y="436" font-size="11" font-family="monospace" fill="#666666">Duck Village | city limit</text>
+<text x="428" y="450" font-size="11" font-family="monospace" fill="#666666">street Beacon Street mean 7.9 max 20.0</text>
+<rect x="840" y="420" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 870.0,477.2 L 874.7,467.7 L 876.4,468.8 L 915.8,493.5 L 922.3,497.6 L 1000.3,546.6 L 1000.6,546.8 L 1007.8,550.8 L 1037.5,567.1 L 1071.8,593.1 L 1095.0,610.6 L 1102.7,619.7 L 1116.9,636.4 L 1130.8,652.8 L 1134.9,657.4 L 1143.9,667.8 L 1161.7,688.5 L 1207.1,748.6 L 1222.5,771.1 L 1229.6,781.4 L 1230.0,782.1 L 1229.3,785.6 L 1228.0,792.3" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1227.9,792.3 L 1187.1,733.5 L 1131.1,663.6 L 1072.8,608.7 L 1035.4,581.8 L 1027.2,585.2 L 1013.2,567.1 L 1004.7,565.4 L 987.1,551.6 L 951.1,534.5 L 938.2,524.1 L 873.3,486.3" fill="none" stroke="#2f8f4e" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="848" y="436" font-size="11" font-family="monospace" fill="#666666">Union Square | Winter Hill</text>
+<text x="848" y="450" font-size="11" font-family="monospace" fill="#666666">path Somerville Community Path mean 7.7 max 11.6</text>
+<rect x="1260" y="420" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1352.8,450.0 L 1410.9,478.1 L 1428.3,486.6 L 1526.9,534.3 L 1550.0,545.5 L 1549.8,564.6 L 1549.8,569.1 L 1549.8,574.3 L 1549.7,581.9 L 1549.7,582.1 L 1549.7,585.2 L 1549.7,598.4 L 1549.5,608.6 L 1549.5,619.0 L 1549.5,629.2 L 1549.4,640.2 L 1549.4,651.1 L 1549.2,662.1 L 1549.2,673.1 L 1549.2,682.9 L 1549.1,692.6 L 1549.1,702.4 L 1549.1,712.2 L 1549.1,715.4 L 1548.9,741.3 L 1552.6,747.8 L 1556.2,754.0 L 1560.7,761.8 L 1566.3,771.1 L 1570.0,777.8 L 1573.1,783.2 L 1583.6,801.0 L 1587.2,807.2 L 1583.5,810.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1523.6,545.3 L 1552.8,770.6 L 1566.0,795.1" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="1268" y="436" font-size="11" font-family="monospace" fill="#666666">Powder House Square | city limit</text>
+<text x="1268" y="450" font-size="11" font-family="monospace" fill="#666666">street Pearson Road mean 6.9 max 12.6</text>
+<rect x="0" y="840" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 390.0,1181.8 L 324.8,1171.8 L 311.9,1163.0 L 304.8,1158.1 L 304.6,1157.9 L 295.3,1150.7 L 294.9,1150.1 L 291.0,1146.6 L 286.7,1142.9 L 278.5,1134.7 L 271.0,1125.9 L 250.1,1099.1 L 243.7,1091.7 L 237.1,1084.5 L 230.0,1078.0 L 222.4,1071.8 L 214.6,1066.1 L 211.3,1064.0 L 201.7,1057.9 L 181.4,1044.6 L 90.2,986.6 L 88.8,985.8 L 81.8,981.1 L 75.1,975.9 L 68.5,970.4 L 62.6,964.5 L 56.8,958.1 L 51.5,951.5 L 46.8,944.6 L 42.3,937.2 L 38.4,929.6 L 35.3,922.2 L 35.1,921.8 L 32.0,913.8 L 30.0,906.7" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 382.0,1193.3 L 303.7,1139.8 L 233.3,1064.9 L 80.6,965.7 L 62.4,946.4" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="8" y="856" font-size="11" font-family="monospace" fill="#666666">Brickbottom | Twin City</text>
+<text x="8" y="870" font-size="11" font-family="monospace" fill="#666666">street McGrath Highway mean 6.1 max 7.0</text>
+<rect x="420" y="840" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 604.6,870.0 L 607.2,871.3 L 627.5,881.4 L 627.1,881.4 L 620.5,898.2 L 607.2,931.5 L 589.4,968.6 L 564.3,1021.0 L 554.5,1041.6 L 548.5,1054.0 L 564.3,1065.7 L 592.3,1086.0 L 617.3,1104.4 L 643.6,1123.7 L 651.6,1129.8 L 651.6,1130.1 L 721.7,1193.5 L 755.0,1225.2 L 755.6,1224.3 L 761.6,1230.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 498.4,1015.6 L 651.3,1126.9 L 761.6,1229.7" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="428" y="856" font-size="11" font-family="monospace" fill="#666666">Porter Square | Spring Hill</text>
+<text x="428" y="870" font-size="11" font-family="monospace" fill="#666666">street Summer Street mean 5.2 max 19.5</text>
+<rect x="840" y="840" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1098.3,870.6 L 1093.5,879.5 L 1089.1,888.0 L 1081.2,902.9 L 1048.3,966.6 L 1039.1,984.6 L 1024.8,1012.2 L 1019.8,1022.0 L 986.5,1086.6 L 985.3,1089.1 L 1133.7,1163.2 L 1143.9,1168.3 L 1112.2,1230.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 956.1,1145.1 L 1097.3,870.0" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="848" y="856" font-size="11" font-family="monospace" fill="#666666">Porter Square | Spring Hill</text>
+<text x="848" y="870" font-size="11" font-family="monospace" fill="#666666">street Linden Avenue mean 5.1 max 20.0</text>
+<rect x="1260" y="840" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1374.4,870.0 L 1424.1,937.3 L 1421.3,943.2 L 1420.0,945.1 L 1424.7,948.2 L 1439.3,958.4 L 1496.1,998.2 L 1526.5,1019.6 L 1533.0,1024.2 L 1560.6,1042.2 L 1566.5,1046.3 L 1574.0,1050.6 L 1547.9,1098.7 L 1536.4,1119.8 L 1516.2,1157.4 L 1507.2,1173.8 L 1477.1,1230.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1355.2,897.3 L 1517.5,1011.8 L 1584.8,1052.5" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="1268" y="856" font-size="11" font-family="monospace" fill="#666666">Porter Square | Spring Hill</text>
+<text x="1268" y="870" font-size="11" font-family="monospace" fill="#666666">street Somerville Avenue mean 4.7 max 10.2</text>
+<rect x="0" y="1260" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 390.0,1595.8 L 380.8,1600.8 L 375.7,1603.6 L 357.2,1612.8 L 322.6,1582.4 L 35.5,1331.8 L 30.0,1327.2 L 99.2,1338.7" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 304.6,1589.8 L 63.7,1391.3 L 51.7,1377.0" fill="none" stroke="#2f8f4e" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="8" y="1276" font-size="11" font-family="monospace" fill="#666666">North Point | Twin City</text>
+<text x="8" y="1290" font-size="11" font-family="monospace" fill="#666666">path Somerville Community Path mean 4.5 max 5.0</text>
+<rect x="420" y="1260" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 502.0,1293.2 L 510.1,1290.0 L 588.4,1410.9 L 620.6,1460.6 L 674.8,1536.9 L 683.6,1549.3 L 758.0,1650.0 L 745.8,1648.2" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 749.6,1645.0 L 744.0,1638.1 L 567.3,1389.4 L 560.8,1374.7 L 506.3,1304.4" fill="none" stroke="#2f8f4e" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="428" y="1276" font-size="11" font-family="monospace" fill="#666666">Brickbottom | Inner Belt</text>
+<text x="428" y="1290" font-size="11" font-family="monospace" fill="#666666">path Somerville Community Path mean 4.0 max 10.1</text>
+<rect x="840" y="1260" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1108.1,1643.1 L 1107.8,1643.4 L 1105.7,1645.2 L 1103.7,1646.8 L 1102.1,1647.7 L 1100.6,1648.6 L 1097.2,1650.0 L 1091.7,1628.2 L 1089.8,1620.3 L 1087.7,1610.9 L 1084.1,1596.5 L 1081.2,1582.2 L 1078.6,1569.1 L 1077.1,1561.9 L 1074.1,1551.0 L 1070.6,1539.4 L 1067.1,1529.0 L 1063.2,1520.1 L 1060.0,1512.8 L 1056.5,1506.2 L 1051.4,1496.8 L 1047.5,1491.0 L 1038.3,1475.8 L 1024.9,1453.5 L 1017.7,1440.6 L 996.3,1395.6 L 993.3,1388.7 L 990.8,1381.3 L 988.9,1374.0 L 987.7,1366.3 L 987.7,1366.3 L 987.1,1359.4 L 987.1,1352.3 L 987.6,1345.2 L 987.7,1343.2 L 988.2,1339.4 L 989.4,1332.1 L 993.3,1311.2 L 994.0,1307.1 L 996.8,1292.5 L 997.3,1290.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1112.9,1636.0 L 1095.2,1601.4 L 1079.8,1543.6 L 1066.9,1511.3 L 1008.6,1420.7" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="848" y="1276" font-size="11" font-family="monospace" fill="#666666">East Somerville | Union Square</text>
+<text x="848" y="1290" font-size="11" font-family="monospace" fill="#666666">street McGrath Highway mean 3.9 max 6.0</text>
+<rect x="1260" y="1260" width="420" height="420" fill="none" stroke="#eeeeee"/>
+<path d="M 1644.4,1635.8 L 1626.5,1650.0 L 1295.6,1290.0 L 1329.2,1293.0" fill="none" stroke="#222222" stroke-width="2"/>
+<path d="M 1564.5,1538.0 L 1347.9,1301.2" fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.85"/>
+<text x="1268" y="1276" font-size="11" font-family="monospace" fill="#666666">Spring Hill | city limit</text>
+<text x="1268" y="1290" font-size="11" font-family="monospace" fill="#666666">street Beacon Street mean 3.6 max 4.1</text>
+</svg>

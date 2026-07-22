@@ -312,11 +312,28 @@ def main():
             return name
         short = " ".join(ABBREV.get(w, w) for w in name.split())
         return short if est_width(short, 13) * 1.15 <= length else None
+    # L7: the administrative lines themselves. L8: how to read them —
+    # the demarcating features, their labels, and honest "nothing" dots.
     L7 = layer("L7_boundaries")
+    L8 = layer("L8_annotations")
     L7.raw(f'<path d="{" ".join(polygon_ds(city_outline_pg))}" fill="none" '
            f'stroke="#3a3a3a" stroke-width="4" opacity="0.35"/>')
+    borders_debug = []
 
-    def draw_run(run, kind, fname, fgeom, width):
+    def _dev_stats(stroke, run):
+        """Sampled deviation of the annotation stroke from the border."""
+        ds = []
+        for p in getattr(stroke, "geoms", [stroke]):
+            if not isinstance(p, LineString):
+                continue
+            n = max(2, int(p.length // 30))
+            ds.extend(p.interpolate(k / n, normalized=True).distance(run)
+                      for k in range(n + 1))
+        if not ds:
+            return 0.0, 0.0
+        return sum(ds) / len(ds), max(ds)
+
+    def draw_run(run, kind, fname, fgeom, width, tag):
         """One contiguous border run with a single classification."""
         color, dash = BORDER_STYLE[kind]
         # the demarcating feature: draw its real geometry near the border
@@ -347,15 +364,30 @@ def main():
                     stroke.intersection(run.buffer(slack, cap_style="flat")))
             kept = sum(p.length for p in getattr(stroke, "geoms", [stroke])
                        if isinstance(p, LineString)) if stroke is not None else 0
-            if kept < 0.5 * run.length:
+            mean_dev, max_dev = (_dev_stats(stroke, run) if stroke is not None
+                                 else (0.0, 0.0))
+            # a real demarcator tracks the border on average, not just
+            # within worst-case slack (kills rail that merely crosses by)
+            mean_cap = 18 if kind == "rail" else 12
+            if kept < 0.5 * run.length or mean_dev > mean_cap:
                 stroke, kind, fname = run, None, ""
                 color, dash = BORDER_STYLE[None]
         if stroke is None:
             return
         parts = [p for p in getattr(stroke, "geoms", [stroke])
                  if isinstance(p, LineString)]
+        mean_dev, max_dev = _dev_stats(stroke, run) if kind else (0.0, 0.0)
+        borders_debug.append({
+            "tag": tag, "kind": kind, "name": fname,
+            "run_len": round(run.length, 1),
+            "stroke_len": round(sum(p.length for p in parts), 1),
+            "mean_dev": round(mean_dev, 1), "max_dev": round(max_dev, 1),
+            "run": [(round(x, 1), round(y, 1)) for x, y in run.coords],
+            "stroke": [[(round(x, 1), round(y, 1)) for x, y in p.coords]
+                       for p in parts],
+        })
         for part in parts:
-            L7.raw(f'<path d="{path_d(part.simplify(1).coords)}" fill="none" '
+            L8.raw(f'<path d="{path_d(part.simplify(1).coords)}" fill="none" '
                    f'stroke="{color}" stroke-width="{width}"{dash}/>')
         if fname and parts:
             longest = max(parts, key=lambda p: p.length)
@@ -369,12 +401,12 @@ def main():
                     # a long border repeats its name along its whole extent
                     text = repeat_to_length(label, longest.length * 0.94, 13)
                     style.pop("text_anchor", None)
-                    L7.text_on_path(path_d(coords), text, style)
+                    L8.text_on_path(path_d(coords), text, style)
                 else:
-                    L7.text_on_path(path_d(coords), label, style,
+                    L8.text_on_path(path_d(coords), label, style,
                                     start_offset="50%")
 
-    def draw_border(seg, width=3.0):
+    def draw_border(seg, width=3.0, tag=""):
         # the administrative line itself, always, as a hairline
         for part in getattr(seg, "geoms", [seg]):
             if isinstance(part, LineString):
@@ -445,12 +477,12 @@ def main():
                 if isinstance(run, MultiLineString):
                     run = max(run.geoms, key=lambda g: g.length)
                 kind, fname, fgeom = verdicts[i]
-                draw_run(run, kind, fname, fgeom, width)
+                draw_run(run, kind, fname, fgeom, width, tag)
                 i = j + 1
 
     # interior borders: neighborhood vs neighborhood
     for na, nb, seg in shared_borders(hoods_pg, tol=8):
-        draw_border(seg)
+        draw_border(seg, tag=f"{na} | {nb}")
     # exterior borders: each neighborhood's frontage on the city limit —
     # classified the same way (the Mystic frontage reads as water, the
     # Cambridge line as the street it follows, …)
@@ -458,7 +490,9 @@ def main():
     for name, geom in hoods_pg:
         seg = _clean_lines(geom.boundary.intersection(city_edge))
         if seg is not None and seg.length > 30:
-            draw_border(seg, width=4.0)
+            draw_border(seg, width=4.0, tag=f"{name} | city limit")
+    (ROOT / "out/borders_debug.json").write_text(json.dumps(
+        {"runs": borders_debug}, indent=1))
 
     # ── L5 neighborhood hero typography (fitted, not just a curve)
     L5 = layer("L5_heroes")
@@ -531,7 +565,7 @@ def main():
         doc.write(outdir / f"{key}.svg")
         print(f"wrote {outdir / f'{key}.svg'}")
     print_order = ["L4_adjacent", "L2_neighborhoods", "L7_boundaries",
-                   "L6_typography", "L3_transit", "L5_heroes"]
+                   "L8_annotations", "L6_typography", "L3_transit", "L5_heroes"]
     write_combined(ROOT / "out/somerville.svg", [docs[k] for k in print_order],
                    PAGE_W, page_h, background=PAPER)
     print(f"wrote {ROOT / 'out/somerville.svg'} ({PAGE_W}×{page_h})")

@@ -22,12 +22,13 @@ LAYER_META = {
     "L4_adjacent": ("Adjacent towns", "Medford, Cambridge, Charlestown…", False),
     "L5_heroes": ("Hero labels", "fitted neighborhood typography", False),
     "L6_typography": ("Roads / parks / water", "the all-text layer", False),
-    "L7_boundaries": ("Boundaries", "city outline + neighborhood borders", True),
+    "L7_boundaries": ("Boundaries", "the administrative lines", True),
+    "L8_annotations": ("Boundary annotations", "what demarcates each border", True),
 }
 
 # Stacking, bottom → top. Heroes are topmost.
 Z_ORDER = ["L1_basemap", "L4_adjacent", "L2_neighborhoods", "L7_boundaries",
-           "L6_typography", "L3_transit", "L5_heroes"]
+           "L8_annotations", "L6_typography", "L3_transit", "L5_heroes"]
 
 
 def main():
