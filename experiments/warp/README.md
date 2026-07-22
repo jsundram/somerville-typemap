@@ -86,10 +86,13 @@ Anything written here is treated as the spec on the next iteration.
 - Lines in a multi-line label may take **different font sizes** — fit each
   line to its own chord instead of sharing the smallest line's size. It
   should still read as one label (keep adjacent-line size ratios modest).
-- An earlier (smaller) line may float anywhere between the **start and
-  center** of the widest line — never right of center (it would read as a
-  suffix), but don't glue it to the start if there's more room inward
-  (user note 2026-07-22: INNER in Inner Belt, TEN in Ten Hills).
+- An earlier (smaller) line may float from the widest line's **start to a
+  bit past its center** (~⅓ of the slack) — far right reads as a suffix,
+  but don't glue it to the start if there's more room inward, and let it
+  **grow to fill** its corner (user notes 2026-07-22: INNER in Inner
+  Belt ×2, TEN in Ten Hills).
+- No letter may be crushed unreadable at a taper — pull the line inward
+  off sharp corners instead (user note 2026-07-22: the T in TEELE).
 
 ## Results log
 
@@ -100,3 +103,5 @@ Anything written here is treated as the spec on the next iteration.
 | 2026-07-22 | perline + reading-order fix | 14.0% | 28.1% (North Point) | small early lines start-align over the widest line: Twin City reads TWIN/CITY, Inner Belt in order — but INNER collapses in its corner (−1.9pt median). |
 | 2026-07-22 | envelope (glyph outlines, per-glyph vertical stretch) | 18.9% | 4.7% (Boynton Yards) | first outline renderer; sliver spill solved (North Point 17.2%/0.0). Flags: adjacent-glyph height jumps read ransom-note (SPRING/WINTER/UNION); interline band collapses line 2 under a tiny line 1 (Inner Belt 5.4%); spill at slanted boundaries — center-ray misses glyph corners (Boynton). Next: smooth the envelope across glyphs, widen the band, sample edge rays. |
 | 2026-07-22 | envelope v2 (continuous warp: shared advance-edge samples, piecewise-linear inside glyphs; wider interline band) | 25.0% | 3.2% (Boynton Yards) | ransom-note jumps gone; letter tops flow with the shape. Remaining: partitions scored before geometric shrink, so Inner Belt (9.7%)/Ten Hills (12.6%) keep collapsed layouts; straight baselines leave bellies empty below and spill where the baseline exits the polygon (Boynton). Next lever: two-sided envelope — per-glyph baseline follows the lower boundary. |
+| 2026-07-22 | envelope v3 (two-sided: bottoms follow the lower boundary; post-shrink partition re-scoring; shared interline splits; pairwise row-collision shrink; floating early lines) | 35.0% | 3.4% (Spring Hill) | **coverage bar met** (median 35.0% ≥ 35%). Inner Belt 30.8%, Ten Hills 35.7%, Twin City 32.3% (single line, lovely). Open: spill bar missed in 8 cells (worst 3.4%, glyphs poke slanted boundaries between samples); Porter Square's stacked lines read tangled on the steep diagonal even though rows don't touch — likely wants a single line or abbreviation; Hillside (19.6%) still the bent-shape holdout. |
+| 2026-07-22 | envelope v4 (dense samples, margin 3, asymmetric taper-window fit, growth pass, floating past center) | 32.0% | 0.6% (Porter Square) | **spill bar effectively met** (18/19 ≤ 0.2%); Ten Hills untangled; INNER fills its corner. Costs: taper trims gave back coverage (Ball Square 23.1%, −3pt median vs v3) — bars now trade against each other. TEELE's T still wedge-crushed (room check permits 50% one-sided compression); Hillside tail still mush (bent shape needs FFD); Porter still stacks on the steep sliver. Next: within-glyph envelope-slope cap for glyph coherence; revisit trim thresholds to win coverage back. |

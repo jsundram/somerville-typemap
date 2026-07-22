@@ -29,7 +29,8 @@ from typemap.borders import _clean_lines, classify, shared_borders, split_chunks
 from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
 from typemap.osm import load_layers, _relation_polygon
-from typemap.svgdoc import SvgDoc, est_width, path_d, write_combined
+from typemap.svgdoc import (SvgDoc, est_width, path_d, repeat_to_length,
+                            write_combined)
 
 ROOT = Path(__file__).parent
 PAGE_W = 3400
@@ -101,7 +102,10 @@ def main():
         gaps = admin_pg.difference(
             unary_union([g for _, g in hoods_pg]).buffer(1))
         for piece in getattr(gaps, "geoms", [gaps]):
-            if piece.area < 400:
+            # skip tiny scraps and long invisible slivers (the legal
+            # boundary spike along the rail corridor toward Charlestown) —
+            # a piece too thin to see shouldn't mint phantom borders
+            if piece.area < 400 or piece.buffer(-6).is_empty:
                 continue
             i = max(range(len(hoods_pg)),
                     key=lambda i: piece.buffer(8).intersection(hoods_pg[i][1]).area)
@@ -110,6 +114,11 @@ def main():
 
     city_pg = unary_union([g for _, g in hoods_pg]).buffer(0)
     street_clip = city_pg.buffer(6)
+    # For the drawn outline and exterior borders: morphological opening
+    # removes sub-visible spikes (North Point's legal sliver along the
+    # rail corridor toward Charlestown would otherwise mint a phantom
+    # border out to Community College).
+    city_outline_pg = city_pg.buffer(-5).buffer(5).buffer(0)
 
     # Adjacent towns (page-space, clipped) — needed before coloring so
     # neighborhoods also avoid clashing with the town next door.
@@ -304,7 +313,7 @@ def main():
         short = " ".join(ABBREV.get(w, w) for w in name.split())
         return short if est_width(short, 13) * 1.15 <= length else None
     L7 = layer("L7_boundaries")
-    L7.raw(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
+    L7.raw(f'<path d="{" ".join(polygon_ds(city_outline_pg))}" fill="none" '
            f'stroke="#3a3a3a" stroke-width="4" opacity="0.35"/>')
 
     def draw_run(run, kind, fname, fgeom, width):
@@ -327,11 +336,18 @@ def main():
             else:
                 stroke = _clean_lines(
                     fgeom.intersection(run.buffer(18, cap_style="flat")))
-            # a matched stroke must actually hug the border — a nearby
-            # parallel street a block away (Porter St) is not this border
+            # a matched stroke must actually hug the border: trim whatever
+            # strays beyond the slack ribbon (tails curving away at the
+            # ends), and if less than half the run survives, the match was
+            # spurious — a parallel street a block off (Porter St) is not
+            # this border
             slack = 60 if kind == "rail" else 20  # rail corridors are wide
-            if (stroke is not None
-                    and stroke.hausdorff_distance(run) > slack):
+            if stroke is not None:
+                stroke = _clean_lines(
+                    stroke.intersection(run.buffer(slack, cap_style="flat")))
+            kept = sum(p.length for p in getattr(stroke, "geoms", [stroke])
+                       if isinstance(p, LineString)) if stroke is not None else 0
+            if kept < 0.5 * run.length:
                 stroke, kind, fname = run, None, ""
                 color, dash = BORDER_STYLE[None]
         if stroke is None:
@@ -348,9 +364,15 @@ def main():
                 coords = list(longest.simplify(1).coords)
                 if coords[-1][0] < coords[0][0]:
                     coords.reverse()
-                L7.text_on_path(path_d(coords), label,
-                                {**LAYERS["border_label"], "fill": color},
-                                start_offset="50%")
+                style = {**LAYERS["border_label"], "fill": color}
+                if longest.length > est_width(label, 13) * 3.2:
+                    # a long border repeats its name along its whole extent
+                    text = repeat_to_length(label, longest.length * 0.94, 13)
+                    style.pop("text_anchor", None)
+                    L7.text_on_path(path_d(coords), text, style)
+                else:
+                    L7.text_on_path(path_d(coords), label, style,
+                                    start_offset="50%")
 
     def draw_border(seg, width=3.0):
         # the administrative line itself, always, as a hairline
@@ -375,14 +397,43 @@ def main():
                         and pieces[k].intersection(prev[2].buffer(16)).length
                         >= 0.3 * pieces[k].length):
                     verdicts[k] = prev
-            # ends: an unmatched end chunk joins its neighbor's feature
-            # when that feature still covers a fair share of it
-            for k, nb in ((0, 1), (len(pieces) - 1, len(pieces) - 2)):
-                if (0 <= nb < len(pieces) and verdicts[k][0] is None
-                        and verdicts[nb][0] is not None
-                        and pieces[k].intersection(verdicts[nb][2].buffer(16)).length
-                        >= 0.3 * pieces[k].length):
-                    verdicts[k] = verdicts[nb]
+            # extension: a matched feature grows across adjacent unmatched
+            # chunks for as long as it keeps hugging the border — so a
+            # street runs to the border's corner, not to where the
+            # classifier's confidence ran out
+            def hugs(verdict, chunk):
+                kind, _, fg = verdict
+                slack = 60 if kind == "rail" else 22
+                if isinstance(fg, LineString):
+                    s0 = fg.project(Point(chunk.coords[0]))
+                    s1 = fg.project(Point(chunk.coords[-1]))
+                    if abs(s1 - s0) < 8:
+                        return False
+                    sub = substring(fg, min(s0, s1), max(s0, s1))
+                    return sub.hausdorff_distance(chunk) <= slack
+                return chunk.within(fg.buffer(slack))
+
+            changed = True
+            while changed:
+                changed = False
+                for k in range(len(pieces)):
+                    if verdicts[k][0] is not None:
+                        continue
+                    for nb in (k - 1, k + 1):
+                        if (0 <= nb < len(pieces) and verdicts[nb][0] is not None
+                                and hugs(verdicts[nb], pieces[k])):
+                            verdicts[k] = verdicts[nb]
+                            changed = True
+                            break
+            # snap-to-corner: a short unmatched stub (one chunk) beside a
+            # feature run joins it, so Central St meets its corner instead
+            # of stopping a half-block short
+            for k in range(len(pieces)):
+                if verdicts[k][0] is None and pieces[k].length <= 180:
+                    for nb in (k - 1, k + 1):
+                        if 0 <= nb < len(pieces) and verdicts[nb][0] is not None:
+                            verdicts[k] = verdicts[nb]
+                            break
             i = 0
             while i < len(pieces):
                 j = i
@@ -403,7 +454,7 @@ def main():
     # exterior borders: each neighborhood's frontage on the city limit —
     # classified the same way (the Mystic frontage reads as water, the
     # Cambridge line as the street it follows, …)
-    city_edge = city_pg.boundary.buffer(3)
+    city_edge = city_outline_pg.boundary.buffer(3)
     for name, geom in hoods_pg:
         seg = _clean_lines(geom.boundary.intersection(city_edge))
         if seg is not None and seg.length > 30:

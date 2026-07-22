@@ -16,12 +16,12 @@ ROOT = Path(__file__).parent
 OUT = ROOT / "out/viewer.html"
 
 LAYER_META = {
-    "L1_basemap": ("Basemap", "schematic reference", False),
-    "L2_neighborhoods": ("Neighborhoods", "region tints + name wash", True),
+    "L1_basemap": ("Basemap", "schematic reference", True),
+    "L2_neighborhoods": ("Neighborhoods", "region tints + name wash", False),
     "L3_transit": ("Transit", "T stops + Community Path", True),
-    "L4_adjacent": ("Adjacent towns", "Medford, Cambridge, Charlestown…", True),
-    "L5_heroes": ("Hero labels", "fitted neighborhood typography", True),
-    "L6_typography": ("Roads / parks / water", "the all-text layer", True),
+    "L4_adjacent": ("Adjacent towns", "Medford, Cambridge, Charlestown…", False),
+    "L5_heroes": ("Hero labels", "fitted neighborhood typography", False),
+    "L6_typography": ("Roads / parks / water", "the all-text layer", False),
     "L7_boundaries": ("Boundaries", "city outline + neighborhood borders", True),
 }
 

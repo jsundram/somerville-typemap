@@ -110,10 +110,11 @@ def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
                 continue
             slack = halves[big] - halves[i]
             if i < big:
-                # earlier (smaller) lines may float between the start and
-                # center of the big line — right of center reads as a
-                # suffix, but gluing to the start wastes room (user note)
-                t_tgt = min(max(t_of(r["center"]), t_big - slack), t_big)
+                # earlier (smaller) lines may float from the big line's
+                # start to a bit past its center — far right reads as a
+                # suffix, but gluing to the start wastes room (user notes)
+                t_tgt = min(max(t_of(r["center"]), t_big - slack),
+                            t_big + 0.3 * slack)
             else:
                 t_tgt = min(max(t_of(r["center"]), t_big - slack), t_big + slack)
             ch = r["chord"]
@@ -153,9 +154,16 @@ def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
         # Estimates lie; geometry doesn't — shrink only the offending lines.
         rows = line_layout(lines, sizes)
         for _ in range(40):
-            bad = [i for i, r in enumerate(rows)
+            bad = {i for i, r in enumerate(rows)
                    if r["size"] > min_size
-                   and not r["box"].within(polygon.buffer(r["size"] * 0.12))]
+                   and not r["box"].within(polygon.buffer(r["size"] * 0.12))}
+            # rows must not collide with each other either (interleaving
+            # glyphs score well on paper but are unreadable)
+            for i, ra in enumerate(rows):
+                for j in range(i + 1, len(rows)):
+                    inter = ra["box"].intersection(rows[j]["box"]).area
+                    if inter > 0.04 * min(ra["box"].area, rows[j]["box"].area):
+                        bad |= {k for k in (i, j) if rows[k]["size"] > min_size}
             if not bad:
                 break
             for i in bad:
@@ -163,6 +171,29 @@ def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
             rows = line_layout(lines, sizes)
         sizes = [max(s, min_size) for s in sizes]
         rows = line_layout(lines, sizes)
+
+        def fits(rows):
+            for i, r in enumerate(rows):
+                if not r["box"].within(polygon.buffer(r["size"] * 0.12)):
+                    return False
+                for j in range(i + 1, len(rows)):
+                    if r["box"].intersection(rows[j]["box"]).area > \
+                       0.04 * min(r["box"].area, rows[j]["box"].area):
+                        return False
+            return True
+
+        # grow lines that still have room after floating into place
+        # (user note: INNER should fill its corner, not just sit there)
+        for i in range(len(sizes)):
+            for _ in range(8):
+                trial = list(sizes)
+                trial[i] = min(trial[i] * 1.06, max_size, cap)
+                if trial[i] <= sizes[i]:
+                    break
+                trows = line_layout(lines, trial)
+                if not fits(trows):
+                    break
+                sizes, rows = trial, trows
         score = sum(r["size"] ** 2 * len(r["line"]) for r in rows)
         return rows, score
 
@@ -271,7 +302,7 @@ class _WarpPen:
                                             self.fn(t.transformPoint(pt))))
 
 
-def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
+def algo_envelope(doc, polygon, name, margin=3.0, max_ratio=2.5):
     """Per-line envelope stretch: perline's layout, glyphs as outlines,
     vertically warped to the polygon's local height. The vertical scale
     is sampled at every glyph's advance edges and midpoint (samples are
@@ -336,6 +367,41 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
             return (max(min(up - margin, band_up), 1.0),
                     max(min(dn - margin, band_dn), 1.0))
 
+        # pull the line off sharp tapers, asymmetrically: find the widest
+        # window along the baseline with readable vertical room and fit
+        # the text there (user notes: the T in TEELE, HILLSIDE's tail —
+        # a crushed end glyph is worse than a slightly shorter line)
+        h_min = 0.5 * s
+        for _ in range(2):
+            N = 24
+            xs = [w_nat * j / (N - 1) for j in range(N)]
+            rooms = [up_dn_at(x) for x in xs]
+            good = [rm is not None and rm[0] + rm[1] >= h_min for rm in rooms]
+            best = (0, -1)
+            a = None
+            for j, g in enumerate(good + [False]):
+                if g and a is None:
+                    a = j
+                elif not g and a is not None:
+                    if j - 1 - a > best[1] - best[0]:
+                        best = (a, j - 1)
+                    a = None
+            if best[1] <= best[0]:
+                break
+            x_lo, x_hi = xs[best[0]], xs[best[1]]
+            # never trim below 60% of the natural width — a short readable
+            # line beats a long crushed one, but not by that much
+            if x_hi - x_lo < 0.6 * w_nat:
+                mid_w = (x_lo + x_hi) / 2
+                x_lo = max(0.0, mid_w - 0.3 * w_nat)
+                x_hi = min(w_nat, x_lo + 0.6 * w_nat)
+            if x_lo <= 0.0 and x_hi >= w_nat:
+                break
+            shift = ((x_lo + x_hi) / 2 - w_nat / 2) * sx
+            bx, by = bx + ux * shift, by + uy * shift
+            usable = (x_hi - x_lo) * sx * 0.98
+            sx = min(usable / w_nat, s / upm * max_ratio)
+
         x_pen = 0.0
         for gname, adv in zip(gnames, advs):
             if gname is None or bounds(gname) is None:
@@ -351,7 +417,7 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
             # edges + midpoint (edges are shared with the neighbors, so
             # tops AND bottoms form continuous curves)
             knots, tops, bots = [], [], []
-            n_k = max(3, min(9, int(adv * sx / 15) + 2))  # dense on wide glyphs
+            n_k = max(3, min(17, int(adv * sx / 8) + 2))  # dense on wide glyphs
             for j in range(n_k):
                 x_k = x_pen + adv * j / (n_k - 1)
                 room = up_dn_at(x_k)
@@ -365,7 +431,13 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
                 tops.append(max(sy, 0.02 * sx))
                 bots.append(bot)
             if not knots:
+                # baseline sample outside the polygon: stay banded anyway
                 sy0 = min(s / upm, max_ratio * sx)
+                if band_up != float("inf"):
+                    sy0 = min(sy0, band_up / gy1)
+                if band_dn != float("inf") and g_lo < 0:
+                    sy0 = min(sy0, band_dn / -g_lo)
+                sy0 = max(sy0, 0.02 * sx)
                 knots, tops, bots = [x_pen], [sy0], [g_lo * sy0]
 
             def interp(x, vals, knots=knots):
