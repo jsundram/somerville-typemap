@@ -63,8 +63,23 @@ def load_layers(data: dict) -> dict:
             elif closed and tags.get("natural") == "water":
                 water.append((tags.get("name", ""), Polygon(coords)))
             elif tags.get("waterway") and tags.get("name"):
-                waterways.append((tags["name"], LineString(coords)))
+                # culverted/buried streams (Winter Brook under I-93) must not
+                # name water polygons or classify borders as "water"
+                buried = (tags.get("tunnel") in ("yes", "culvert")
+                          or tags.get("covered") == "yes"
+                          or tags.get("layer", "0").startswith("-"))
+                if not buried:
+                    waterways.append((tags["name"], LineString(coords)))
         elif el["type"] == "relation":
+            if tags.get("route") in ("bicycle", "foot") and tags.get("name"):
+                # route relations carry the path where member ways are
+                # unnamed (e.g. the Community Path west of Davis)
+                for m in el.get("members", []):
+                    coords = [(g["lon"], g["lat"])
+                              for g in (m.get("geometry") or []) if g]
+                    if len(coords) >= 2:
+                        cycleways.append((tags["name"], LineString(coords)))
+                continue
             poly = _relation_polygon(el)
             if poly is None:
                 continue

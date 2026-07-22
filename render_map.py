@@ -259,14 +259,28 @@ def main():
            f'stroke="#3a3a3a" stroke-width="4" opacity="0.35"/>')
 
     def draw_border(seg, width=3.0):
-        kind, fname = classify(seg, feats, tree)
+        kind, fname, fgeom = classify(seg, feats, tree)
         color, dash = BORDER_STYLE[kind]
+        # the administrative line itself, always, as a hairline
         for part in getattr(seg, "geoms", [seg]):
             if isinstance(part, LineString):
                 L7.raw(f'<path d="{path_d(part.coords)}" fill="none" '
+                       f'stroke="#b0a898" stroke-width="1.2"/>')
+        # the demarcating feature: draw its real geometry near the border
+        # (a census-block border zigzags along a rail corridor; the train
+        # doesn't) — water/unmatched keep the border line itself
+        if kind in ("street", "rail", "path"):
+            stroke = _clean_lines(fgeom.intersection(seg.buffer(24)))
+        else:
+            stroke = seg
+        if stroke is None:
+            return
+        for part in getattr(stroke, "geoms", [stroke]):
+            if isinstance(part, LineString):
+                L7.raw(f'<path d="{path_d(part.simplify(1).coords)}" fill="none" '
                        f'stroke="{color}" stroke-width="{width}"{dash}/>')
         if fname:
-            longest = max((p for p in getattr(seg, "geoms", [seg])
+            longest = max((p for p in getattr(stroke, "geoms", [stroke])
                            if isinstance(p, LineString)),
                           key=lambda p: p.length, default=None)
             if longest and longest.length > est_width(fname, 13) * 1.3:

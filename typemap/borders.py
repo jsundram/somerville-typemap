@@ -47,9 +47,10 @@ def classify(border, features, tree: STRtree, tol: float = 14,
     """Which feature runs along `border`?
 
     features: [(kind, name, geom)] indexed by `tree` over `geoms`.
-    Returns (kind, name) or (None, "").
+    Returns (kind, name, matched_geom) or (None, "", None).
     """
-    best_kind, best_name, best_score = None, "", 0.0
+    best = (None, "", None)
+    best_score = 0.0
     for idx in tree.query(border.buffer(tol)):
         kind, name, geom = features[idx]
         ratio = border.intersection(geom.buffer(tol)).length / border.length
@@ -57,5 +58,5 @@ def classify(border, features, tree: STRtree, tol: float = 14,
             continue
         score = ratio + KIND_PRIORITY[kind] * 0.001  # priority as tie-break
         if score > best_score:
-            best_kind, best_name, best_score = kind, name, score
-    return best_kind, best_name
+            best, best_score = (kind, name, geom), score
+    return best
