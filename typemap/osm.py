@@ -31,8 +31,9 @@ def _relation_polygon(el):
 
 def load_layers(data: dict) -> dict:
     """Overpass JSON → {'streets', 'cycleways', 'parks', 'water', 'stations'}."""
-    streets = {}  # (name, class) -> [LineString]
+    streets = {}  # name -> {"cls": best class, "segs": [LineString]}
     cycleways, parks, water, stations, waterways = [], [], [], [], []
+    rank = {"minor": 0, "mid": 1, "major": 2}
 
     for el in data["elements"]:
         tags = el.get("tags", {})
@@ -46,7 +47,12 @@ def load_layers(data: dict) -> dict:
                 cycleways.append((tags.get("name", ""), LineString(coords)))
             elif hwy and tags.get("name"):
                 cls = "major" if hwy in MAJOR else "mid" if hwy in MID else "minor"
-                streets.setdefault((tags["name"], cls), []).append(LineString(coords))
+                # one entry per name (not per class): a street whose class
+                # changes along its run would otherwise be labeled twice
+                entry = streets.setdefault(tags["name"], {"cls": cls, "segs": []})
+                if rank[cls] > rank[entry["cls"]]:
+                    entry["cls"] = cls
+                entry["segs"].append(LineString(coords))
             elif closed and (tags.get("leisure") in PARK_LEISURE
                              or tags.get("landuse") in PARK_LANDUSE):
                 parks.append((tags.get("name", ""), Polygon(coords)))
@@ -67,12 +73,12 @@ def load_layers(data: dict) -> dict:
             stations.append((tags["name"], _center(el)))
 
     merged_streets = []
-    for (name, cls), segs in streets.items():
-        geom = unary_union(segs)
+    for name, entry in streets.items():
+        geom = unary_union(entry["segs"])
         if isinstance(geom, MultiLineString):
             geom = linemerge(geom)
         lines = geom.geoms if isinstance(geom, MultiLineString) else [geom]
-        merged_streets.extend((name, cls, line) for line in lines)
+        merged_streets.extend((name, entry["cls"], line) for line in lines)
     # Unnamed water polygons inherit the name of a waterway centerline
     # crossing them (OSM names the line, rarely the riverbank polygon).
     water = [

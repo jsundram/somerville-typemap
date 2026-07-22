@@ -22,15 +22,21 @@ LAYER_META = {
     "L4_adjacent": ("Adjacent towns", "Medford, Cambridge, Charlestown…", True),
     "L5_heroes": ("Hero labels", "fitted neighborhood typography", True),
     "L6_typography": ("Roads / parks / water", "the all-text layer", True),
+    "L7_boundaries": ("Boundaries", "city outline + neighborhood borders", True),
 }
+
+# Stacking, bottom → top. Heroes are topmost.
+Z_ORDER = ["L1_basemap", "L4_adjacent", "L2_neighborhoods", "L7_boundaries",
+           "L6_typography", "L3_transit", "L5_heroes"]
 
 
 def main():
-    svgs = sorted((ROOT / "out/layers").glob("L*.svg"))
-    w, h = 3400, int(re.search(r'height="(\d+)"', svgs[0].read_text()).group(1))
+    svgs = {f.stem: f for f in (ROOT / "out/layers").glob("L*.svg")}
+    ordered = [svgs[k] for k in Z_ORDER if k in svgs]
+    w, h = 3400, int(re.search(r'height="(\d+)"', ordered[0].read_text()).group(1))
 
     imgs, boxes = [], []
-    for f in svgs:
+    for f in ordered:
         key = f.stem
         title, hint, on = LAYER_META.get(key, (key, "", True))
         uri = "data:image/svg+xml;base64," + base64.b64encode(f.read_bytes()).decode()
@@ -53,7 +59,8 @@ def main():
           font:14px/1.5 "Avenir Next","Helvetica Neue",sans-serif; }}
   #stage {{ position:absolute; inset:0; overflow:hidden; cursor:grab; touch-action:none; }}
   #stage:active {{ cursor:grabbing; }}
-  #map {{ position:absolute; width:{w}px; height:{h}px; transform-origin:0 0;
+  #map {{ position:absolute; left:0; top:0; width:{w}px; height:{h}px;
+          transform-origin:0 0; will-change:transform;
           background:#faf7f0; box-shadow:0 8px 40px rgba(0,0,0,.35); }}
   #map img {{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }}
   #panel {{ position:absolute; top:12px; left:12px; background:var(--panel);
@@ -72,16 +79,26 @@ def main():
   <p>scroll to zoom · drag to pan</p>
 </div>
 <script>
+  // Pan/zoom strategy: during a gesture, only a compositor transform
+  // changes (fast, but scaling above the baked size looks soft). When
+  // the gesture settles, "bake": relayout the layer images at the new
+  // size so the browser re-rasterizes the SVGs crisply — once, not per
+  // frame. This keeps interaction smooth despite ~10k text glyphs.
   const stage=document.getElementById('stage'), map=document.getElementById('map');
-  let s=1, tx=0, ty=0;
-  const apply=()=>map.style.transform=`translate(${{tx}}px,${{ty}}px) scale(${{s}})`;
-  const fit=()=>{{ s=Math.min(stage.clientWidth/{w}, stage.clientHeight/{h});
-                   tx=(stage.clientWidth-{w}*s)/2; ty=(stage.clientHeight-{h}*s)/2; apply(); }};
+  const W={w}, H={h};
+  let s=1, tx=0, ty=0, baked=1, bakeTimer=null;
+  const apply=()=>map.style.transform=`translate(${{tx}}px,${{ty}}px) scale(${{s/baked}})`;
+  const bake=()=>{{ baked=s; map.style.width=(W*s)+'px'; map.style.height=(H*s)+'px'; apply(); }};
+  const queueBake=()=>{{ clearTimeout(bakeTimer); bakeTimer=setTimeout(bake, 250); }};
+  const fit=()=>{{ s=Math.min(stage.clientWidth/W, stage.clientHeight/H)||.3;
+                   tx=(stage.clientWidth-W*s)/2; ty=(stage.clientHeight-H*s)/2; bake(); }};
   addEventListener('load', fit); addEventListener('resize', fit);
   stage.addEventListener('wheel', e=>{{ e.preventDefault();
     const k=Math.exp(-e.deltaY*0.0015), r=stage.getBoundingClientRect();
     const x=e.clientX-r.left, y=e.clientY-r.top;
-    tx=x-(x-tx)*k; ty=y-(y-ty)*k; s*=k; apply(); }}, {{passive:false}});
+    const ns=Math.min(Math.max(s*k, .05), 8);
+    const kk=ns/s;
+    tx=x-(x-tx)*kk; ty=y-(y-ty)*kk; s=ns; apply(); queueBake(); }}, {{passive:false}});
   let drag=null;
   stage.addEventListener('pointerdown', e=>{{ drag={{x:e.clientX-tx, y:e.clientY-ty}};
     stage.setPointerCapture(e.pointerId); }});

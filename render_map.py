@@ -36,6 +36,33 @@ FRINGE = 2200  # ft of surrounding towns shown beyond the city limits
 to_stateplane = Transformer.from_crs("EPSG:4326", "EPSG:2249", always_xy=True).transform
 
 
+def color_regions(regions, palette, fixed=()):
+    """Greedy graph coloring: no two touching regions share a color.
+
+    regions: [(name, geom)] to color; fixed: [(color, geom)] pre-colored
+    areas (adjacent towns) whose colors neighbors must also avoid.
+    """
+    from itertools import combinations
+
+    grown = {n: g.buffer(20) for n, g in regions}
+    neigh = {n: set() for n, _ in regions}
+    for (a, _), (b, _) in combinations(regions, 2):
+        if grown[a].intersects(grown[b]):
+            neigh[a].add(b)
+            neigh[b].add(a)
+    forbidden = {n: set() for n, _ in regions}
+    for color, g in fixed:
+        gb = g.buffer(20)
+        for n, _ in regions:
+            if grown[n].intersects(gb):
+                forbidden[n].add(color)
+    colors = {}
+    for n in sorted(neigh, key=lambda n: -len(neigh[n])):
+        used = {colors[m] for m in neigh[n] if m in colors} | forbidden[n]
+        colors[n] = next((c for c in palette if c not in used), palette[0])
+    return colors
+
+
 def main():
     hoods = [
         (f["properties"]["name"], shape(f["geometry"]))
@@ -59,9 +86,26 @@ def main():
 
     city_pg = to_page(city)
     hoods_pg = sorted((name, to_page(g)) for name, g in hoods)
-    hood_color = {name: HERO_CYCLE[i % len(HERO_CYCLE)] for i, (name, _) in enumerate(hoods_pg)}
     street_clip = city_pg.buffer(6)
     frame = to_page(city.buffer(FRINGE).envelope)
+
+    # Adjacent towns (page-space, clipped) — needed before coloring so
+    # neighborhoods also avoid clashing with the town next door.
+    towns_pg = []
+    for el in towns_raw:
+        tags = el.get("tags", {})
+        cfg = TOWNS.get(tags.get("name", ""))
+        if not cfg or el["type"] != "relation":
+            continue
+        poly = _relation_polygon(el)
+        if poly is None:
+            continue
+        g = ll_to_page(poly).intersection(frame).difference(city_pg.buffer(4))
+        if not g.is_empty and g.area >= 15000:
+            towns_pg.append((cfg.get("display", tags["name"]), cfg["color"], g))
+
+    hood_color = color_regions(hoods_pg, HERO_CYCLE,
+                               fixed=[(color, g) for _, color, g in towns_pg])
 
     docs = {}
 
@@ -126,22 +170,11 @@ def main():
 
     # ── L4 adjacent municipalities: tint + sparse name fill + big label
     L4 = layer("L4_adjacent")
-    for el in towns_raw:
-        tags = el.get("tags", {})
-        cfg = TOWNS.get(tags.get("name", ""))
-        if not cfg or el["type"] != "relation":
-            continue
-        poly = _relation_polygon(el)
-        if poly is None:
-            continue
-        g = ll_to_page(poly).intersection(frame).difference(city_pg.buffer(4))
-        if g.is_empty or g.area < 15000:
-            continue
-        display = cfg.get("display", tags["name"])
-        L4.raw(f'<path d="{" ".join(polygon_ds(g))}" fill="{cfg["color"]}" '
+    for display, color, g in towns_pg:
+        L4.raw(f'<path d="{" ".join(polygon_ds(g))}" fill="{color}" '
                f'opacity="0.08" fill-rule="evenodd"/>')
         fill_style = {**LAYERS["neighborhood_fill"], "font_size": 15,
-                      "fill": cfg["color"], "opacity": 0.35, "letter_spacing": 2}
+                      "fill": color, "opacity": 0.35, "letter_spacing": 2}
         linepack_fill(L4, g.simplify(3), [display.lower()], fill_style, leading=2.2)
         # label the chunk nearest the city, not just the biggest —
         # Boston's biggest visible chunk is East Boston, but the part
@@ -150,8 +183,17 @@ def main():
         chunk = max(getattr(g, "geoms", [g]),
                     key=lambda p: p.area / (1 + p.distance(cc)))
         fitted_hero(L4, chunk, display,
-                    {**LAYERS["hero"], "fill": cfg["color"], "opacity": 0.85},
-                    max_size=72)
+                    {**LAYERS["hero"], "fill": color, "opacity": 0.85},
+                    max_size=72, cram=0.5)
+
+    # ── L7 boundaries: city outline + neighborhood borders
+    L7 = layer("L7_boundaries")
+    borders = [f'<path d="{" ".join(polygon_ds(geom))}" fill="none" '
+               f'stroke="#8a8378" stroke-width="2" stroke-dasharray="7 5"/>'
+               for _, geom in hoods_pg]
+    borders.append(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
+                   f'stroke="#3a3a3a" stroke-width="5"/>')
+    L7.group(borders)
 
     # ── L5 neighborhood hero typography (fitted, not just a curve)
     L5 = layer("L5_heroes")
@@ -167,25 +209,64 @@ def main():
 
     # ── L6 typography for parks / water / streets
     L6 = layer("L6_typography")
+
+    # Parks: drop near-duplicate geometries (way + relation mapping the
+    # same park), then carve nested features (a playground inside a park)
+    # out of the parent's fill so their texts never overlap.
+    parks_pg = []
     for name, geom in osm["parks"]:
         g = ll_to_page(geom).intersection(city_pg)
-        if g.is_empty or g.area < 900:
+        if not g.is_empty and g.area >= 900:
+            parks_pg.append((name, g))
+    parks_pg.sort(key=lambda p: -p[1].area)
+    parks_kept = []
+    for name, g in parks_pg:
+        if not any(g.intersection(kg).area > 0.6 * g.area for _, kg in parks_kept):
+            parks_kept.append((name, g))
+    for i, (name, g) in enumerate(parks_kept):
+        inner = [kg for _, kg in parks_kept[i + 1:] if kg.intersects(g)]
+        fill_geom = g.difference(unary_union(inner).buffer(3)) if inner else g
+        if fill_geom.is_empty:
             continue
         words = WORD_OVERRIDES.get(name, [name.lower() if name else "park"])
-        linepack_fill(L6, g.simplify(2), words, LAYERS["park_fill"])
+        linepack_fill(L6, fill_geom.simplify(2), words, LAYERS["park_fill"])
+
+    # Water: union overlapping polygons (ways + relations often double-map
+    # the same river) and contour each merged component once.
+    water_pg = []
     for name, geom in osm["water"]:
         g = ll_to_page(geom).intersection(frame)
-        if g.is_empty or g.area < 900:
+        if not g.is_empty and g.area >= 900:
+            water_pg.append((name, g))
+    merged_water = unary_union([g for _, g in water_pg])
+    for comp in getattr(merged_water, "geoms", [merged_water]):
+        if comp.area < 900:
             continue
+        name = next((n for n, g in sorted(water_pg, key=lambda w: -w[1].area)
+                     if n and g.intersects(comp)), "")
         words = WORD_OVERRIDES.get(name, [name.upper() if name else "water ~"])
-        contour_fill(L6, g.simplify(2), " ".join(words), LAYERS["water_fill"])
+        contour_fill(L6, comp.simplify(2), " ".join(words), LAYERS["water_fill"])
+
+    # Streets: suppress dual-carriageway twins — a second component that
+    # runs parallel within a few px of an already-labeled longer one.
     order = {"minor": 0, "mid": 1, "major": 2}
-    for name, cls, line in sorted(osm["streets"], key=lambda s: order[s[1]]):
+    by_name = {}
+    for name, cls, line in osm["streets"]:
         g = ll_to_page(line).simplify(1.5).intersection(street_clip)
-        style = LAYERS[f"street_{cls}"]
         for part in getattr(g, "geoms", [g]):
-            if isinstance(part, LineString) and part.length > est_width(name, style["font_size"]) * 0.8:
-                street_label(L6, part, name, style)
+            if isinstance(part, LineString):
+                by_name.setdefault((name, cls), []).append(part)
+    for (name, cls), parts in sorted(by_name.items(), key=lambda kv: order[kv[0][1]]):
+        style = LAYERS[f"street_{cls}"]
+        parts.sort(key=lambda p: -p.length)
+        kept = []
+        for part in parts:
+            if part.length <= est_width(name, style["font_size"]) * 0.8:
+                continue
+            if kept and part.intersection(unary_union(kept).buffer(18)).length > 0.6 * part.length:
+                continue
+            kept.append(part)
+            street_label(L6, part, name, style)
 
     # ── write per-layer SVGs + the combined print map
     outdir = ROOT / "out/layers"
@@ -193,8 +274,8 @@ def main():
     for key, doc in docs.items():
         doc.write(outdir / f"{key}.svg")
         print(f"wrote {outdir / f'{key}.svg'}")
-    print_order = ["L4_adjacent", "L2_neighborhoods", "L6_typography",
-                   "L3_transit", "L5_heroes"]
+    print_order = ["L4_adjacent", "L2_neighborhoods", "L7_boundaries",
+                   "L6_typography", "L3_transit", "L5_heroes"]
     write_combined(ROOT / "out/somerville.svg", [docs[k] for k in print_order],
                    PAGE_W, page_h, background=PAPER)
     print(f"wrote {ROOT / 'out/somerville.svg'} ({PAGE_W}×{page_h})")

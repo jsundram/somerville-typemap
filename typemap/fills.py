@@ -86,7 +86,7 @@ def contour_fill(doc: SvgDoc, polygon, text: str, style: dict,
                  spacing: float | None = None, max_rings: int = 200) -> None:
     """Fill `polygon` with `text` flowing along nested inward contours."""
     size = style["font_size"]
-    spacing = spacing if spacing is not None else size * 1.3
+    spacing = spacing if spacing is not None else size * 1.45
     elements: list[str] = []
     # First ring slightly inset so glyphs don't poke past the boundary.
     inset = size * 0.45
@@ -98,7 +98,7 @@ def contour_fill(doc: SvgDoc, polygon, text: str, style: dict,
             for ring in (poly.exterior, *poly.interiors):
                 for run in _upright_runs(ring.coords):
                     line = LineString(run)
-                    if line.length < size * 2:  # too small to hold glyphs
+                    if line.length < size * 3:  # tiny switchback runs overlap their neighbors
                         continue
                     doc.text_on_path(path_d(run),
                                      repeat_to_length(text, line.length, size),
@@ -115,15 +115,30 @@ def street_label(doc: SvgDoc, line, name: str, style: dict, sep: str = " · ") -
     doc.text_on_path(path_d(coords), text, style)
 
 
-def fitted_hero(doc: SvgDoc, polygon, name: str, style: dict,
-                bulge: float = 0.10, max_size: float = 84, min_size: float = 13) -> None:
-    """A hero label that actually fits inside `polygon`.
+PER_CHAR_HERO = 0.72  # rounded-bold caps run wider than the body estimate
 
-    The baseline follows the polygon's own orientation: the long axis of
-    its minimum rotated rectangle, moved to a chord through the label
-    point and clipped to the polygon. Font size is chosen so the text
-    fits the chord and the polygon's short dimension; names that still
-    can't fit on one line are stacked word-wise on parallel baselines.
+
+def _partitions(words: list[str], n: int):
+    """All order-preserving splits of `words` into n non-empty lines."""
+    from itertools import combinations
+    for cuts in combinations(range(1, len(words)), n - 1):
+        bounds = (0, *cuts, len(words))
+        yield [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+
+
+def fitted_hero(doc: SvgDoc, polygon, name: str, style: dict,
+                bulge: float = 0.08, max_size: float = 140, min_size: float = 13,
+                cram: float = 0.80) -> None:
+    """A hero label crammed into `polygon`, rainbow-map style.
+
+    The baseline direction is the long axis of the polygon's minimum
+    rotated rectangle. The name is tried as 1..3 stacked lines (every
+    order-preserving word split); for each candidate, font size is
+    limited by the cross-axis room per line and by each line's own chord
+    through the polygon at its stacking offset — so lines hug the shape,
+    wider in the polygon's belly, shorter near its edges. The candidate
+    with the biggest resulting type wins. `cram` is the fraction of the
+    cross-axis the text block may occupy.
     """
     import math
 
@@ -142,32 +157,76 @@ def fitted_hero(doc: SvgDoc, polygon, name: str, style: dict,
         px, py = -px, -py
 
     c = polygon.representative_point()
-    chord = LineString([(c.x - ux * long_len, c.y - uy * long_len),
-                        (c.x + ux * long_len, c.y + uy * long_len)]).intersection(polygon)
-    if hasattr(chord, "geoms"):
-        chord = max(chord.geoms, key=lambda g: g.length, default=None)
-    usable = chord.length * 0.92 if chord is not None and not chord.is_empty else long_len * 0.6
 
-    text = name.upper()
-    per_char = 0.68  # rounded-bold caps run wider than the body estimate
-    size = min(max_size, short_len * 0.40, usable / (per_char * len(text)))
-    lines = [text]
-    if size < 24 and " " in text:  # stack the words instead
-        words = text.split()
-        k = min(range(1, len(words)),
-                key=lambda k: abs(len(" ".join(words[:k])) - len(" ".join(words[k:]))))
-        lines = [" ".join(words[:k]), " ".join(words[k:])]
-        longest = max(len(ln) for ln in lines)
-        size = min(max_size, short_len * 0.28, usable / (per_char * longest))
+    def chord_at(off: float):
+        """Longest chord through (center + perp·off) along the long axis."""
+        ox, oy = c.x + px * off, c.y + py * off
+        cut = LineString([(ox - ux * long_len, oy - uy * long_len),
+                          (ox + ux * long_len, oy + uy * long_len)]).intersection(polygon)
+        if hasattr(cut, "geoms"):
+            cut = max((g for g in cut.geoms if isinstance(g, LineString)),
+                      key=lambda g: g.length, default=None)
+        return cut if isinstance(cut, LineString) and not cut.is_empty else None
+
+    words = name.upper().split()
+    best = None  # (size, lines, chords)
+    for n in range(1, min(len(words), 3) + 1):
+        cap = short_len * cram / (n + 0.15 * (n - 1))  # cross-axis room per line
+        for lines in _partitions(words, n):
+            size = min(max_size, cap)
+            chords = []
+            for _ in range(3):  # fixed-point: offsets depend on size
+                leading = size * 1.08
+                chords = [chord_at((i - (n - 1) / 2) * leading) for i in range(n)]
+                fits = [
+                    (ch.length * 0.94) / (PER_CHAR_HERO * len(ln)) if ch else 0
+                    for ln, ch in zip(lines, chords)
+                ]
+                size = min([max_size, cap, *fits])
+                if size <= 0:
+                    break
+            if size > 0 and (best is None or size > best[0]):
+                best = (size, lines, chords)
+
+    if best is None:
+        return
+    size, lines, chords = best
+    n = len(lines)
+
+    def line_layout(sz):
+        """Chord + midpoint + glyph box for each line at font size `sz`."""
+        leading = sz * 1.08
+        out = []
+        for i, ln in enumerate(lines):
+            off = (i - (n - 1) / 2) * leading
+            ch = chord_at(off)
+            if ch is not None:
+                mx, my = ch.interpolate(0.5, normalized=True).coords[0]
+            else:
+                mx, my = c.x + px * off, c.y + py * off
+            half = PER_CHAR_HERO * len(ln) * sz / 2
+            up, dn = sz * 0.62, sz * 0.30  # cap height above / descender below center
+            box = Polygon([
+                (mx - ux * half - px * up, my - uy * half - py * up),
+                (mx + ux * half - px * up, my + uy * half - py * up),
+                (mx + ux * half + px * dn, my + uy * half + py * dn),
+                (mx - ux * half + px * dn, my - uy * half + py * dn),
+            ])
+            out.append((ln, (mx, my), box))
+        return out
+
+    # Estimates lie; geometry doesn't. Shrink until every line's glyph box
+    # actually sits inside the polygon (small tolerance for optical overshoot).
+    room = polygon.buffer(size * 0.12)
+    layout = line_layout(size)
+    while size > min_size and not all(box.within(room) for _, _, box in layout):
+        size *= 0.93
+        layout = line_layout(size)
     size = max(size, min_size)
-
-    mx, my = (chord.interpolate(0.5, normalized=True).coords[0]
-              if chord is not None and not chord.is_empty else (c.x, c.y))
     style = {**style, "font_size": round(size, 1), "text_anchor": "middle"}
-    leading = size * 1.12
-    for i, ln in enumerate(lines):
-        off = (i - (len(lines) - 1) / 2) * leading + size * 0.35  # baseline sits below center
-        ox, oy = mx + px * off, my + py * off
+    for ln, (mx, my), _ in layout:
+        # chord midpoint is the line's optical center; baseline sits below it
+        ox, oy = mx + px * size * 0.35, my + py * size * 0.35
         half = est_width(ln, size) * 0.75
         x0, y0 = ox - ux * half, oy - uy * half
         x1, y1 = ox + ux * half, oy + uy * half
