@@ -1,0 +1,119 @@
+# Rebinning Kontur population (H3) into A5 pentagons
+
+**Question:** can the [Kontur Population
+dataset](https://data.humdata.org/dataset/kontur-population-dataset) — global
+population on 400 m H3 hexagons — be rebinned onto [A5](https://a5geo.org)
+pentagon cells?
+
+**Answer: yes, and it is ordinary areal interpolation.** No A5 cell is a union
+of H3 cells, so this is not a relabelling: each hexagon's population has to be
+split across the pentagons it overlaps. Done as a polygon overlay it conserves
+population exactly and lands within a few percent per cell. `rebin.py` does it;
+`hierarchy_check.py` documents the A5 API traps that make a naive version wrong.
+
+## Resolution mapping
+
+Kontur ships H3 res 8 ("400 m", mean 0.7373 km²), plus 3 km (res 6) and 22 km
+(res 4) aggregates. A5 levels are *exactly* equal area — that is the appeal
+here: population density is `population / cell_area(res)` with a constant
+divisor, no cos(lat) or per-cell area column.
+
+| A5 res | cell area | vs Kontur 400 m | note |
+|-------:|----------:|----------------:|------|
+| 11 | 8.1073 km² | 11 hexes/cell | strong aggregation |
+| 12 | 2.0268 km² | 2.75 hexes/cell | good default for city-scale maps |
+| 13 | 0.5067 km² | 0.69 hexes/cell | closest match to the source grid |
+| 14 | 0.1267 km² | 0.17 hexes/cell | finer than the data; interpolation only |
+| 10 | 32.429 km² | ≈ H3 res 6 (36.13 km²) | matches the 3 km product |
+| 7 | 2075.5 km² | ≈ H3 res 4 (1770 km²) | matches the 22 km product |
+
+## Methods and what they cost
+
+`rebin.py` implements three, all conserving total population to float precision:
+
+- **`area`** — clip each hexagon against the A5 cells it touches and split its
+  population by intersection area. Assumes uniform density inside a source
+  hexagon, which is the only assumption the source data supports.
+- **`subsample`** — push H3 children (res+3, 343 per hexagon) into the A5 cell
+  containing each child centre. No polygon clipping; matches `area` to ~0.1 pp
+  and is ~5× slower in Python, but it is the shape that ports to SQL.
+- **`centroid`** — whole hexagon to the cell containing its centre. Cheap and,
+  at these resolutions, wrong (see below).
+
+Measured against a fixture — a known continuous density field integrated onto
+H3 res 8 as "source", and integrated directly onto A5 cells as ground truth
+(`uv run experiments/a5_rebin/rebin.py --demo --res N`):
+
+| target | `area` mean / max err | `subsample` | `centroid` |
+|--------|----------------------|-------------|------------|
+| A5 res 11 | 1.7% / 3.7% | 1.7% / 3.7% | 4.0% / 8.0% |
+| A5 res 12 | 3.1% / 8.8% | 3.2% / 9.0% | 22% / 63% |
+| A5 res 13 | 5.2% / 21% | 5.2% / 21% | 74% / 200% |
+| A5 res 14 | 8.0% / 44% | 8.1% / 40% | 170% / 766% |
+
+Read it as: aggregating upward is nearly lossless; rebinning to a cell the size
+of the source hexagon costs ~5% typical and ~20% worst-cell, which is the price
+of not knowing how population is arranged *inside* a 400 m hexagon; going finer
+buys resolution the data does not contain. Centroid binning is only tolerable
+at res 11 and below — at res 13 it leaves 39% of the cells empty and
+overshoots another 30% by more than 1.5x.
+
+`--selftest` checks the overlay against Monte Carlo sampling of single hexagons
+at four latitudes: worst L1 0.018 (Monte Carlo noise at n=20 000 is ~0.01).
+
+## Scale
+
+Pure-Python `pya5`: ~230 hexagons/s single core for the overlay (measured on a
+541-hexagon Boston extract, `--res 13`, boundary geometry cached), i.e. ~1.2
+CPU-hours per million hexagons. Somerville is ~14 hexagons; Massachusetts
+~37 000 (≈3 min); the global 400 m file is 6.6 GB, so for anything
+country-scale or larger use the [DuckDB A5
+extension](https://duckdb.org/community_extensions/extensions/a5) or the Rust
+crate rather than this script — the work is embarrassingly parallel by tile.
+
+## A5 API traps (measured, `hierarchy_check.py`)
+
+With `pya5` 0.9.0, reproduced with `a5-js` 0.9.0:
+
+1. **`polygon_to_cells()` returns a compacted, mixed-resolution covering.**
+   Asking for res 13 over a Somerville-sized box returns 27 cells at res 12 *and*
+   13. Treating them as one resolution triple-counts area (a res-12 pentagon
+   covers its four res-13 children).
+2. **The hierarchy is index arithmetic, not geometry.** For a random point,
+   `cell_to_parent(lonlat_to_cell(p, r+k), r) == lonlat_to_cell(p, r)` only
+   ~65% of the time, at every resolution and for k = 1, 2, 3. A cell's children
+   have the same total area as the cell but their union overlaps the cell's own
+   `cell_to_boundary` polygon by just 58%.
+3. **`grid_disk(c, k>=2)` can leak a coarser cell into the ring.** `k=1` was
+   clean in testing.
+
+`lonlat_to_cell`, `cell_to_boundary`, `cell_area` and `grid_disk(c, 1)` are
+mutually consistent — a point is inside its own cell's polygon 100% of the time,
+at every resolution tested — so `rebin.py` builds candidate sets only from
+those, and grows rings until the candidates provably cover the source hexagon.
+Trap 2 also means you cannot sample a cell by averaging over its children
+(that is what made the first version of the fixture report 23% error), and that
+`compact`/`uncompact` should not be used for area bookkeeping. Worth filing
+upstream; until then, treat the hierarchy as unusable for areal work.
+
+## Running it
+
+```sh
+uv run experiments/a5_rebin/rebin.py --demo --res 13     # accuracy fixture
+uv run experiments/a5_rebin/rebin.py --selftest          # overlay vs Monte Carlo
+uv run experiments/a5_rebin/hierarchy_check.py           # the API probe
+
+# real data: Kontur ships GeoPackage; the script wants h3,population
+ogr2ogr -f CSV kontur.csv kontur_population_20231101.gpkg -select h3,population
+uv run experiments/a5_rebin/rebin.py --csv kontur.csv --res 13 --out a5.csv
+```
+
+Output is `a5,population,density_per_km2` with `a5` as the 16-hex-digit cell id
+(`a5.hex_to_u64` to get the integer back). Kontur's geometry is EPSG:3857 —
+reproject to EPSG:4326 before indexing if you read the geometry rather than the
+`h3` column. The fixture uses a synthetic density field, not Kontur's numbers:
+the sandbox this was developed in cannot reach `data.humdata.org`, so the
+pipeline is verified against ground truth it can compute, and the CSV path is
+what runs against the real file.
+
+Kontur Population is CC-BY 4.0; A5 is Apache-2.0.
