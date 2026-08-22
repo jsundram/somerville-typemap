@@ -31,7 +31,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, str(Path(__file__).parent))
 from rebin import (  # noqa: E402
-    SOMERVILLE, a5_polygon, candidates, hex_polygon, integrate, lattice, rebin_area,
+    SOMERVILLE, a5_polygon, bin_polygons, hex_polygon, integrate, lattice, rebin_area,
     true_density,
 )
 
@@ -62,28 +62,6 @@ def raster_cells(bbox: Polygon, metres: float):
         for i in range(nx):
             x, y = minx + i * dlon, miny + j * dlat
             yield Polygon([(x, y), (x + dlon, y), (x + dlon, y + dlat), (x, y + dlat)]), km2
-
-
-def bin_polygons(cells, res: int) -> dict[int, float]:
-    """Area-weighted push of (polygon, population) into A5 cells.
-
-    Fast path: when a pixel's corners and centre all index to the same A5
-    cell, the pixel is wholly inside it -- true for ~95% of 30 m pixels
-    against a 0.5 km2 cell -- so only the stragglers get clipped.
-    """
-    out: dict[int, float] = defaultdict(float)
-    for poly, pop in cells:
-        pts = list(poly.exterior.coords)[:4] + [poly.centroid.coords[0]]
-        indexed = {a5.lonlat_to_cell(p, res) for p in pts}
-        if len(indexed) == 1:
-            out[indexed.pop()] += pop
-            continue
-        parts = [(c, poly.intersection(a5_polygon(c)).area) for c in candidates(poly, res)]
-        total = sum(a for _, a in parts)
-        for cell, area in parts:
-            if area > 0:
-                out[cell] += pop * area / total
-    return dict(out)
 
 
 def build_source(bbox: Polygon, metres: float | None):

@@ -140,6 +140,56 @@ at the cost of Kontur's corrections. Kontur -> A5 remains the right call when
 you want those corrections and the target is res 12 or coarser, where the
 penalty is ~3%.
 
+## Census blocks for a whole state (blocks.py)
+
+For Massachusetts — or any US state — 2020 census blocks are the better input,
+and `blocks.py` bins any polygon layer with a population column into A5:
+
+```sh
+curl -O https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/TABBLOCK20/2020/tl_2020_25_tabblock20.zip
+uv run experiments/a5_rebin/blocks.py tl_2020_25_tabblock20.zip --pop-field POP20 --audit
+uv run experiments/a5_rebin/blocks.py tl_2020_25_tabblock20.zip --pop-field POP20 \
+    --res 13 --out ma_a5.csv
+```
+
+`tabblock20` already carries `POP20`, `HOUSING20` and `ALAND20`, so no join to
+the P.L. 94-171 tables is needed. Measured throughput on the polygon path is
+~500 polygons/s, so a statewide run is minutes, not hours.
+
+Why blocks beat Kontur here: the counts are enumerated rather than modelled,
+and in built-up areas a block is one or two city blocks — far smaller than an
+A5 res-13 cell — so the interpolation penalty that costs 5.2% from Kontur
+drops to the noise floor (the 100 m row in the table above). Kontur's US
+numbers are a re-binning of GHS-POP, which is itself a disaggregation of this
+same census data; going to Kontur for a US map is a round trip through two
+models.
+
+Three caveats, all of which matter more the further west you go in MA:
+
+- **Rural blocks are big.** In the Berkshires a block can span square
+  kilometres — larger than a res-13 cell — and its people cluster along a road
+  while the block covers forest. Straight areal weighting smears them. `--audit`
+  reports exactly what share of the state's population sits in blocks larger
+  than the target cell; `--weights <buildings>` fixes it by splitting each
+  block's count across the building footprints inside it first (MassGIS
+  structures, or Microsoft/OSM footprints) before the A5 overlay. That is
+  strictly better than either raw source.
+- **Differential privacy.** 2020 block counts carry injected noise from the
+  TopDown algorithm — a few people either way per block, occasionally
+  nonsensical (population in a water block). Aggregating into 0.5 km² cells
+  averages most of it out; at res 14, or in sparse rural cells, it is visible.
+- **Vintage and group quarters.** Blocks are April 2020; Kontur refreshes more
+  often. And dorms/prisons are counted where they stand, which is correct but
+  produces spikes (Tufts) that modelled surfaces smooth away.
+
+Use `ALAND20` rather than the polygon area when reporting density if you care
+about waterfront cells; drop zero-population blocks first (most of the file).
+
+Not yet run against the real TIGER file — this sandbox has no route to
+`www2.census.gov` — so the pipeline is exercised against synthetic polygon
+layers in both areal and dasymetric modes (population conserved exactly in
+both).
+
 ## A5 API traps (measured, `hierarchy_check.py`)
 
 With `pya5` 0.9.0, reproduced with `a5-js` 0.9.0:

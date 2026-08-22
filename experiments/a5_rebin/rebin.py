@@ -103,6 +103,27 @@ def rebin_area(rows, res: int) -> dict[int, float]:
     return dict(out)
 
 
+def bin_polygons(cells, res: int) -> dict[int, float]:
+    """Area-weighted push of (polygon, population) into A5 cells.
+
+    Fast path: when a pixel's corners and centre all index to the same A5
+    cell, the pixel is wholly inside it -- true for ~95% of 30 m pixels
+    against a 0.5 km2 cell -- so only the stragglers get clipped.
+    """
+    out: dict[int, float] = defaultdict(float)
+    for poly, pop in cells:
+        pts = list(poly.exterior.coords)[:4] + [poly.centroid.coords[0]]
+        indexed = {a5.lonlat_to_cell(p, res) for p in pts}
+        if len(indexed) == 1:
+            out[indexed.pop()] += pop
+            continue
+        parts = [(c, poly.intersection(a5_polygon(c)).area) for c in candidates(poly, res)]
+        total = sum(a for _, a in parts)
+        for cell, area in parts:
+            if area > 0:
+                out[cell] += pop * area / total
+    return dict(out)
+
 def rebin_subsample(rows, res: int, k: int = 3) -> dict[int, float]:
     out: dict[int, float] = defaultdict(float)
     for h3_index, pop in rows:
