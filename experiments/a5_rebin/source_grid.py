@@ -35,9 +35,11 @@ from rebin import (  # noqa: E402
     true_density,
 )
 
+# Kontur's "400 m" is the H3 res-8 edge length; the cell is 0.737 km2, so the
+# fair square comparison is 860 m, not 400 m.
 SOURCES = [
-    ("H3 res 8 (Kontur 400m)", None),
-    ("raster 400m", 400.0),
+    ("H3 res 8 (Kontur)", None),
+    ("raster 860m (= hex area)", 860.0),
     ("raster 100m (GHS-POP)", 100.0),
     ("raster 30m (HRSL)", 30.0),
 ]
@@ -101,9 +103,9 @@ def build_source(bbox: Polygon, metres: float | None):
 def main() -> int:
     w, s, e, n = SOMERVILLE
     bbox = Polygon([(w, s), (e, s), (e, n), (w, n)])
-    # enough margin that every scored A5 cell (res 12 radius ~0.8 km) is fully
-    # surrounded by source data, without ballooning the 30 m pixel count
-    pad = 0.013
+    # margin of source data around the scored area; cells that still poke out
+    # of it are dropped below rather than scored against truncated input
+    pad = 0.02
     grown = Polygon([(w - pad, s - pad), (e + pad, s - pad),
                      (e + pad, n + pad), (w - pad, n + pad)])
 
@@ -117,7 +119,11 @@ def main() -> int:
     for res in (12, 13, 14):
         km2 = a5.cell_area(res) / 1e6
         scored = {a5.lonlat_to_cell(p, res) for p in lattice(bbox, 4000)}
+        # only score cells the source fully covers -- a cell hanging over the
+        # edge of the source extent measures truncation, not resampling
+        scored = {c for c in scored if grown.contains(a5_polygon(c))}
         truths[res] = {c: integrate(a5_polygon(c), km2) for c in scored}
+        print(f"  (res {res}: scoring {len(scored)} cells)", file=sys.stderr)
 
     for label, metres in SOURCES:
         src, count = build_source(grown, metres)

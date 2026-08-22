@@ -71,6 +71,75 @@ country-scale or larger use the [DuckDB A5
 extension](https://duckdb.org/community_extensions/extensions/a5) or the Rust
 crate rather than this script — the work is embarrassingly parallel by tile.
 
+## Can the rebinning error be avoided by going upstream?
+
+Kontur is a derived product: it starts from GHSL, blends in Meta/CIESIN HRSL
+where available, and uses Microsoft Building Footprints, Copernicus land cover
+and OSM to redistribute and to mask out false positives (quarries, wide roads).
+So the 400 m hexagons are already a *binning choice*, and binning the upstream
+data straight into A5 would skip one hop. `source_grid.py` measures what that
+hop costs: the same fixture field, integrated onto each candidate source grid,
+rebinned onto A5, scored against the field integrated directly onto A5 cells.
+
+| source grid | source cell | A5 res 12 | A5 res 13 | A5 res 14 |
+|---|---|---|---|---|
+| H3 res 8 (Kontur) | 0.737 km² | 3.4% / 8.8% | 5.2% / 21% | 8.0% / 44% |
+| raster 860 m (same area as the hexagon) | 0.740 km² | 1.7% / 6.5% | 5.1% / 19% | 8.2% / 43% |
+| raster 100 m (GHS-POP) | 0.01 km² | 0.6% / 1.1% | 0.6% / 0.9% | 0.6% / 0.9% |
+| raster 30 m (HRSL) | 0.0009 km² | 0.6% / 1.1% | 0.6% / 1.0% | 0.6% / 0.8% |
+
+mean / max per-cell error. 0.6% is the fixture's own quadrature noise — 100 m
+and 30 m are indistinguishable from each other and from exact.
+
+Three things fall out:
+
+- **The penalty is a function of source-cell size over target-cell size, not of
+  shape.** 860 m squares and Kontur's hexagons — same area, different tiling —
+  score the same to within a fraction of a point. Nothing about pentagons vs
+  hexagons is the problem; the source bin being comparable to the target bin is.
+- **A 100 m source erases the penalty.** Once source cells are ~50x smaller
+  than the target, "which pentagon does this belong to" has an unambiguous
+  answer for all but a sliver of the input, and the interpolation assumption
+  stops mattering. Going finer than 100 m buys nothing *for this*.
+- **Below the source resolution nothing helps.** A5 res 14 (0.127 km²) is
+  smaller than a Kontur hexagon; from Kontur the values there are invented, and
+  no method fixes that. Only a finer source makes res 14 meaningful.
+
+### But is it more accurate, and is the data there?
+
+Resampling loss is only one error term, and the smaller one. Kontur's own
+allocation error at 400 m — how much of a hexagon's population sits where the
+model says — is far larger than 5%, and going upstream trades a known 5% for
+whatever the upstream product's error is, *minus the corrections Kontur applied*
+(the OSM masks and building-footprint redistribution are the value Kontur adds
+over raw GHS-POP). So "bin the original data" is more accurate only if you
+either keep those corrections or pick a source that does not need them.
+
+What is actually available:
+
+| source | resolution | availability |
+|---|---|---|
+| GHS-POP R2023A (JRC/Copernicus) | 100 m Mollweide (also 3″/30″ WGS84) | open, global, current — the practical upstream choice |
+| Meta/CIESIN HRSL | 30 m, ~160 countries | on HDX/AWS, but **not updated since 2024** |
+| Microsoft Global ML Building Footprints | vector, ~1.4 B buildings, some heights | ODbL, global |
+| OSM buildings / landuse | vector | ODbL |
+| **US Census 2020 P.L. blocks** | block polygons, **enumerated counts** | open (TIGER/Line + P.L. 94-171) |
+
+For anywhere in the US — Somerville included — the last row is the answer. A
+census block here is a fraction of an A5 res-13 cell, and it carries a counted
+population rather than a modelled one; GHS-POP's US layer is itself a
+disaggregation of that census data, and Kontur is a re-binning of GHS-POP. So
+going Kontur -> A5 for a Somerville map is a round trip through two models to
+get back a worse version of a number that is published directly. Blocks -> A5
+by area weight (optionally dasymetric onto building footprints, which is where
+Microsoft/OSM buildings earn their keep) is both simpler and strictly better.
+
+Globally, or in countries without an open block-level census, GHS-POP 100 m ->
+A5 is the upstream path that pays: it removes the resampling penalty entirely,
+at the cost of Kontur's corrections. Kontur -> A5 remains the right call when
+you want those corrections and the target is res 12 or coarser, where the
+penalty is ~3%.
+
 ## A5 API traps (measured, `hierarchy_check.py`)
 
 With `pya5` 0.9.0, reproduced with `a5-js` 0.9.0:
@@ -100,6 +169,7 @@ upstream; until then, treat the hierarchy as unusable for areal work.
 
 ```sh
 uv run experiments/a5_rebin/rebin.py --demo --res 13     # accuracy fixture
+uv run experiments/a5_rebin/source_grid.py               # source-grid comparison
 uv run experiments/a5_rebin/rebin.py --selftest          # overlay vs Monte Carlo
 uv run experiments/a5_rebin/hierarchy_check.py           # the API probe
 
