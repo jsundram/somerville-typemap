@@ -1,31 +1,75 @@
-# Warped hero glyphs — sub-problem
+# Hero labels — sub-problem
 
-**Goal.** Reproduce the rainbow-map lettering: each neighborhood name
-*maximally, artisanally crammed* into its polygon, letters individually
-warped/scaled so the ink fills the shape — not just the biggest clean
-baselines that fit (the current `fitted_hero`, which is the baseline here).
+**Goal (revised 2026-09-29).** Each neighborhood name set as large as it
+can go inside its polygon in **undistorted letterforms**, laid out by
+*searching* discrete choices (angle, line breaks, abbreviations, curved
+baselines) rather than by bending glyphs. Density comes from the typeface
+and the layout, not from distortion. The look is **technical**, not
+hand-lettered: the map's job is to communicate boundaries locals
+recognize, and the type should read like signage/engineering drawings.
+
+Why the change: see `inspo/README.md`. Of five artist maps, only the
+rainbow map crams letters, and it is hand-lettered; the rest fit plain
+lettering. Seven envelope iterations traded legibility against coverage
+(TEELE's T, SQUARE's S, per-glyph de-skew) without converging.
 
 ## Framing
 
-Input: one polygon (page coordinates) + one name.
-Output: SVG elements (eventually `<path>` glyph outlines, not `<text>`)
-whose ink stays inside the polygon and covers as much of it as possible
-while staying legible.
+Input: one polygon (page coordinates) + one name + its variants.
+Output: `<path>` glyph outlines (fontTools → `SVGPathPen`) whose ink stays
+inside the polygon, as large as possible, still reading as type.
 
-## Candidate algorithms (in rough order of ambition)
+## Algorithms
 
-1. **Per-line envelope stretch** — keep `fitted_hero`'s line layout, but
-   convert glyphs to outlines (fontTools `TTFont.getGlyphSet()` →
-   `pens.svgPathPen`) and scale each glyph vertically to the polygon's
-   local height at its x-position (letters grow into the belly, shrink at
-   tapers). Cheap, already very "rainbow".
-2. **Quad-strip FFD** — fit a strip of quads between the polygon's upper
-   and lower edges along the medial axis; bilinear-warp the whole word's
-   outlines through it. Handles bent polygons (Hillside, Porter sliver).
-3. **Greedy letter packing** — place letters one at a time, each scaled
-   (bounded aspect distortion) to the largest empty rectangle adjacent to
-   the previous letter; words may bend mid-run. Closest to hand-lettering,
-   hardest to keep readable.
+`ALGORITHMS` in `render_sheet.py`. Earlier ones stay for comparison.
+
+1. `baseline` — `fitted_hero` as shipped in L5.
+2. `perline` — fitted_hero chords, one size per line.
+3. `envelope` — per-glyph vertical warp. **Parked at v7 (2026-09-29)**:
+   32.8% median / 1.0% worst spill is the number to beat. Queued envelope
+   work (quad-strip FFD for Hillside, greedy letter packing) is dropped.
+4. `search` — **the new direction.** Enumerate candidates, keep the best:
+   - **variant**: the full name plus entries in `config/words.py`
+     `HERO_VARIANTS` (abbreviations: BALL SQ, 10 HILLS; hand-authored
+     hyphen points: SOMER-VILLE, BRICK-BOTTOM, ASSEM-BLY, POW-DER);
+   - **line breaks**: every partition of the variant's words/hyphen
+     points into 1–3 lines;
+   - **angle**: the polygon's principal axes (min-rotated-rect, both
+     directions kept upright), horizontal, plus a coarse sweep (15°);
+   - **placement**: each line fit to its own chord (perline logic),
+     sized to the largest font where the *actual glyph outlines* fit
+     inside the fitting polygon (containment by outline, not bbox);
+   - **region split** (Hillside, Porter, Ball Sq) as one more candidate
+     type, carrying the existing FLIPS / size-ratio rules;
+   - **curved baseline** (phase 6): text on a smoothed centerline for
+     long, narrow shapes, sized to the narrowest width along the way.
+
+   Score: smallest line's cap height first, then coverage; small
+   penalties for more lines, abbreviations, hyphens, and steep angles.
+   Optional mild per-line x-stretch in [0.85, 1.2] (phase 4) — the only
+   distortion allowed.
+
+## Typeface direction (phase 4)
+
+Technical, signage/engineering register, heavy weights available, open
+license (OFL) so it can ship in print and be committed as TTF for
+fontTools. Candidates to compare on the same sheet against today's Arial
+Rounded Bold:
+
+| Face | Why |
+|---|---|
+| Overpass (Heavy/Black) | open Highway Gothic — US road-sign lettering, i.e. the names locals read at intersections |
+| Barlow / Barlow Condensed | road-sign/license-plate grotesk; wide weight + width range |
+| Big Shoulders Display | Chicago wayfinding signage; condensed, packs tight |
+| IBM Plex Sans Condensed | engineering-drawing tone; pairs with Plex Mono for annotations |
+
+The pick should pair with (or replace) `BODY_FONT` in `config/style.py`
+so heroes, streets and border annotations read as one system.
+
+## Fitting geometry (phase 5)
+
+Fit against a smoothed polygon (morphological opening removes notches
+and spikes); spill is still measured against the true polygon.
 
 ## Success criteria
 
@@ -34,9 +78,10 @@ neighborhood shapes (spill/coverage are ink-pixel ratios):
 
 | Metric | Bar |
 |---|---|
-| Spill (ink outside polygon / total ink) | ≤ 0.5% |
-| Coverage (inked share of polygon area) | ≥ 35% (baseline ≈ see below; rainbow original eyeballs ≈ 50%) |
-| Legibility | manual: letters in reading order, per-glyph x/y scale ratio within [0.4, 3.0] (raised from 2.5, user OK 2026-07-22: "Brickbottom could be bigger"), no glyph collisions |
+| Spill (ink outside polygon / total ink) | ≤ 0.5% (expect ~0 by construction) |
+| Min cap height (smallest line on the sheet) | report it; higher is better — the new legibility number |
+| Coverage (inked share of polygon area) | report; envelope v7 = 32.8% median. Expect a dip before typeface/stretch win it back |
+| Legibility | manual: reading order, no glyph collisions, letters undistorted (x-stretch only, within [0.85, 1.2]) |
 | Determinism / runtime | same input → same output; < 5 s for all 19 |
 
 ## The loop
@@ -81,6 +126,10 @@ Anything written here is treated as the spec on the next iteration.
 
 ## Taste rules (edit freely)
 
+(2026-09-29: rules marked *[envelope]* only bind the parked envelope
+algorithm — `search` doesn't bend glyphs, so they're moot there. All
+other rules carry over.)
+
 - Reading order must survive: top line first, left to right.
 - A stretched letter should still look like the same typeface, not a balloon.
 - Lines in a multi-line label may take **different font sizes** — fit each
@@ -93,7 +142,7 @@ Anything written here is treated as the spec on the next iteration.
   Belt ×2, TEN in Ten Hills).
 - No letter may be crushed unreadable at a taper — pull the line inward
   off sharp corners instead (user note 2026-07-22: the T in TEELE).
-- Letters stay upright: cap the baseline tilt *within* one glyph (~±11°)
+- *[envelope]* Letters stay upright: cap the baseline tilt *within* one glyph (~±11°)
   — the word may ride a wavy baseline, but individual letters must not
   shear into parallelograms (user calls 2026-07-22: T crossbar in TEELE,
   first R in PORTER, the U in Union's SQUARE).
@@ -104,7 +153,7 @@ Anything written here is treated as the spec on the next iteration.
   direction (HILL rotated 180° to match SIDE — user 2026-07-22) and keep
   the font-size ratio between words ≤ ~2.2 (user: PORTER vs SQUARE
   contrast too big).
-- A word must not visually break into lines: cap baseline steps between
+- *[envelope]* A word must not visually break into lines: cap baseline steps between
   adjacent letters (user 2026-07-22: the S in BALL SQUARE's SQUARE
   detached onto "its own line").
 
