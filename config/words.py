@@ -111,7 +111,8 @@ PERCEIVED_LABELS = {"Massachusetts Avenue": "Mass Ave"}
 # Names not listed: full name only (+ SQ where it applies).
 HERO_ABBREVIATIONS = {"SQUARE": "SQ"}
 HERO_VARIANTS = {
-    "Assembly Square":     ["AS-SEM-BLY SQUARE", "ASS-EMBLY SQUARE"],
+    # no ASS-EMBLY: cute, but not for a wide audience (user, 2026-09-29)
+    "Assembly Square":     ["AS-SEM-BLY SQUARE"],
     "Boynton Yards":       ["BOYN-TON YARDS"],
     "Brickbottom":         ["BRICK-BOTTOM"],
     "Duck Village":        ["DUCK VILL-AGE"],

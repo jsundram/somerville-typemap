@@ -1,6 +1,6 @@
 algorithm: search
 neighborhood            coverage   spill  cap px  label
-Assembly Square           16.1%   0.0%    46.3  ASS- / EMBLY SQ
+Assembly Square           16.1%   0.0%    34.2  ASSEMBLY / SQUARE
 Ball Square               22.5%   0.0%    81.8  BALL / SQ
 Boynton Yards             19.2%   0.0%    45.0  BOYNTON / YARDS
 Brickbottom                9.3%   0.0%    40.9  BRICKBOTTOM
