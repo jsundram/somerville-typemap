@@ -26,6 +26,7 @@ STATION_LINES = {
     "Magoun Square": "green",
     "Ball Square": "green",
     "Medford/Tufts": "green",
+    "Lechmere": "green",
 }
 LINE_COLORS = {"red": "#da291c", "orange": "#ed8b00", "green": "#00843d"}
 
@@ -78,7 +79,8 @@ TOWNS = {
 
 # Perceived borders: the line locals draw, as opposed to the legal one.
 # Each route follows the named streets in order (junction to junction);
-# the first/last street run out toward start/end. Not accurate —
+# the first/last street run out toward start/end, or stop where they
+# cross the waterway named in end_at. Not accurate —
 # semantically useful (user, 2026-09-29: "my mental map … Cambridge St to
 # Beacon St to Somerville Ave to Mass Ave as the edge with Cambridge").
 PERCEIVED_BORDERS = [
@@ -88,6 +90,8 @@ PERCEIVED_BORDERS = [
                   "Massachusetts Avenue"],
         "start": "east",
         "end": "west",
+        # Cambridge ends at the brook; Mass Ave beyond it is Arlington
+        "end_at": "Alewife Brook",
     },
 ]
 

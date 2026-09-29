@@ -526,6 +526,16 @@ def main():
     for border in PERCEIVED_BORDERS:
         pieces = chain_route(route_streets, border["route"],
                              border["start"], border["end"])
+        if border.get("end_at"):
+            # stop the last street at its first crossing of the named
+            # waterway (Mass Ave at Alewife Brook: past it is Arlington)
+            stop = unary_union([ll_to_page(g) for n, g in osm["waterways"]
+                                if n == border["end_at"]])
+            name, last = pieces[-1]
+            hits = last.intersection(stop)
+            if not hits.is_empty:
+                cut = min(last.project(h) for h in getattr(hits, "geoms", [hits]))
+                pieces[-1] = (name, substring(last, 0, cut))
         whole = linemerge(MultiLineString([p for _, p in pieces]))
         for part in getattr(whole, "geoms", [whole]):
             L9.raw(f'<path d="{path_d(part.simplify(1.5).coords)}" fill="none" '
