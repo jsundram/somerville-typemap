@@ -3,9 +3,12 @@
 # ///
 """Bundle out/layers/*.svg into a single self-contained viewer page.
 
-Each layer becomes a stacked <img> with a data: URI — the browser treats
-them as cached raster surfaces, so pan/zoom stays fast no matter how many
-text elements a layer contains. Checkboxes toggle layers independently.
+Each layer is a hidden <img> (data: URI) used as a vector source; the
+visible viewport is drawn onto one canvas with ctx.drawImage at the
+current zoom. Chrome replays an SVG <img> in full for every raster tile
+(~430 ms/tile at high zoom — measured 2026-09-29), so letting the
+compositor tile huge scaled <img>s was the slowness; one clipped
+drawImage per settle costs ~20–250 ms total. Checkboxes toggle layers.
 """
 
 import base64
@@ -24,11 +27,13 @@ LAYER_META = {
     "L6_typography": ("Roads / parks / water", "the all-text layer", False),
     "L7_boundaries": ("Boundaries", "the administrative lines", True),
     "L8_annotations": ("Boundary annotations", "what demarcates each border", True),
+    "L9_perceived": ("Perceived borders", "the line locals draw", True),
 }
 
 # Stacking, bottom → top. Heroes are topmost.
 Z_ORDER = ["L1_basemap", "L4_adjacent", "L2_neighborhoods", "L7_boundaries",
-           "L8_annotations", "L6_typography", "L3_transit", "L5_heroes"]
+           "L8_annotations", "L9_perceived", "L6_typography", "L3_transit",
+           "L5_heroes"]
 
 
 def main():
@@ -41,9 +46,9 @@ def main():
         key = f.stem
         title, hint, on = LAYER_META.get(key, (key, "", True))
         uri = "data:image/svg+xml;base64," + base64.b64encode(f.read_bytes()).decode()
-        hidden = "" if on else " hidden"
         checked = " checked" if on else ""
-        imgs.append(f'<img id="{key}" src="{uri}" alt="{title}"{hidden}>')
+        imgs.append(f'<img id="{key}" src="{uri}" alt="{title}"'
+                    f' data-on="{int(on)}">')
         boxes.append(f'<label><input type="checkbox" data-layer="{key}"{checked}>'
                      f'<b>{title}</b><span>{hint}</span></label>')
 
@@ -60,10 +65,9 @@ def main():
           font:14px/1.5 "Avenir Next","Helvetica Neue",sans-serif; }}
   #stage {{ position:absolute; inset:0; overflow:hidden; cursor:grab; touch-action:none; }}
   #stage:active {{ cursor:grabbing; }}
-  #map {{ position:absolute; left:0; top:0; width:{w}px; height:{h}px;
-          transform-origin:0 0; will-change:transform;
-          background:#faf7f0; box-shadow:0 8px 40px rgba(0,0,0,.35); }}
-  #map img {{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }}
+  #sources {{ display:none; }}
+  #stage canvas {{ position:absolute; left:0; top:0; transform-origin:0 0;
+                   will-change:transform; pointer-events:none; }}
   #panel {{ position:absolute; top:12px; left:12px; background:var(--panel);
             border-radius:6px; padding:.8rem 1rem; box-shadow:0 4px 20px rgba(0,0,0,.25);
             display:flex; flex-direction:column; gap:.35rem; max-width:240px; }}
@@ -75,7 +79,8 @@ def main():
   #legend {{ margin-top:.4rem; font-size:.72rem; color:var(--dim); }}
   #legend i {{ font-style:normal; font-weight:700; margin-right:.45em; white-space:nowrap; }}
 </style>
-<div id="stage"><div id="map">{''.join(imgs)}</div></div>
+<div id="sources">{''.join(imgs)}</div>
+<div id="stage"><canvas id="overview"></canvas><canvas id="view"></canvas></div>
 <div id="panel">
   <h1><b>somerville</b> typemap</h1>
   {''.join(boxes)}
@@ -85,34 +90,70 @@ def main():
   <p>scroll to zoom · drag to pan</p>
 </div>
 <script>
-  // Pan/zoom strategy: during a gesture, only a compositor transform
-  // changes (fast, but scaling above the baked size looks soft). When
-  // the gesture settles, "bake": relayout the layer images at the new
-  // size so the browser re-rasterizes the SVGs crisply — once, not per
-  // frame. This keeps interaction smooth despite ~10k text glyphs.
-  const stage=document.getElementById('stage'), map=document.getElementById('map');
-  const W={w}, H={h};
-  let s=1, tx=0, ty=0, baked=1, bakeTimer=null;
-  const apply=()=>map.style.transform=`translate(${{tx}}px,${{ty}}px) scale(${{s/baked}})`;
-  const bake=()=>{{ baked=s; map.style.width=(W*s)+'px'; map.style.height=(H*s)+'px'; apply(); }};
-  const queueBake=()=>{{ clearTimeout(bakeTimer); bakeTimer=setTimeout(bake, 250); }};
-  const fit=()=>{{ s=Math.min(stage.clientWidth/W, stage.clientHeight/H)||.3;
-                   tx=(stage.clientWidth-W*s)/2; ty=(stage.clientHeight-H*s)/2; bake(); }};
-  addEventListener('load', fit); addEventListener('resize', fit);
+  // Pan/zoom strategy. Layers are hidden SVG <img>s used as vector
+  // sources. Two canvases:
+  //  - overview: the whole map once at ~2k px (re-drawn on layer toggle);
+  //    it fills in during gestures, soft but instant;
+  //  - view: the viewport plus a margin, drawn crisp at the current zoom
+  //    once a gesture settles ("bake").
+  // During a gesture only CSS transforms change (compositor-only).
+  const stage=document.getElementById('stage');
+  const ov=document.getElementById('overview'), vw=document.getElementById('view');
+  const W={w}, H={h}, PAPER='#faf7f0', M=0.25;  // bake margin, viewport fractions
+  const OVS=Math.min(1, 2048/W);                 // overview scale
+  const dpr=Math.min(devicePixelRatio||1, 2);
+  const imgs=[...document.querySelectorAll('#sources img')];
+  const on=Object.fromEntries(imgs.map(i=>[i.id, i.dataset.on==='1']));
+  let s=1, tx=0, ty=0, bk={{s:1, ox:0, oy:0}}, bakeTimer=null, ready=false;
+
+  function drawLayers(ctx) {{
+    ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);
+    for (const i of imgs) if (on[i.id]) ctx.drawImage(i,0,0,W,H);
+  }}
+  function drawOverview() {{
+    ov.width=Math.round(W*OVS); ov.height=Math.round(H*OVS);
+    const c=ov.getContext('2d'); c.setTransform(OVS,0,0,OVS,0,0); drawLayers(c);
+  }}
+  function bake() {{
+    if (!ready) return;
+    const cw=stage.clientWidth, ch=stage.clientHeight;
+    const mx=cw*M, my=ch*M, bw=cw+2*mx, bh=ch+2*my;
+    vw.width=Math.round(bw*dpr); vw.height=Math.round(bh*dpr);
+    vw.style.width=bw+'px'; vw.style.height=bh+'px';
+    const c=vw.getContext('2d');
+    c.setTransform(dpr,0,0,dpr,0,0); c.clearRect(0,0,bw,bh);
+    c.save(); c.translate(mx+tx, my+ty); c.scale(s,s);
+    c.beginPath(); c.rect(0,0,W,H); c.clip();  // paper only over the map
+    drawLayers(c); c.restore();
+    bk={{s, ox:-mx-tx, oy:-my-ty}};  // canvas origin, relative to the map origin on screen
+    apply();
+  }}
+  function apply() {{
+    ov.style.transform=`translate(${{tx}}px,${{ty}}px) scale(${{s/OVS}})`;
+    const k=s/bk.s;  // canvas px were baked at bk.s; map origin is now at (tx,ty)
+    vw.style.transform=`translate(${{tx+bk.ox*k}}px,${{ty+bk.oy*k}}px) scale(${{k}})`;
+  }}
+  const queueBake=()=>{{ clearTimeout(bakeTimer); bakeTimer=setTimeout(bake, 150); }};
+  function fit() {{
+    s=Math.min(stage.clientWidth/W, stage.clientHeight/H)||.3;
+    tx=(stage.clientWidth-W*s)/2; ty=(stage.clientHeight-H*s)/2; apply(); bake();
+  }}
+  Promise.all(imgs.map(i=>i.decode().catch(()=>{{}}))).then(()=>{{
+    ready=true; drawOverview(); fit(); }});
+  addEventListener('resize', fit);
   stage.addEventListener('wheel', e=>{{ e.preventDefault();
     const k=Math.exp(-e.deltaY*0.0015), r=stage.getBoundingClientRect();
     const x=e.clientX-r.left, y=e.clientY-r.top;
-    const ns=Math.min(Math.max(s*k, .05), 8);
-    const kk=ns/s;
+    const ns=Math.min(Math.max(s*k, .05), 12), kk=ns/s;
     tx=x-(x-tx)*kk; ty=y-(y-ty)*kk; s=ns; apply(); queueBake(); }}, {{passive:false}});
   let drag=null;
   stage.addEventListener('pointerdown', e=>{{ drag={{x:e.clientX-tx, y:e.clientY-ty}};
     stage.setPointerCapture(e.pointerId); }});
-  stage.addEventListener('pointermove', e=>{{ if(drag){{ tx=e.clientX-drag.x; ty=e.clientY-drag.y; apply(); }} }});
-  stage.addEventListener('pointerup', ()=>drag=null);
-  document.querySelectorAll('#panel input').forEach(cb=>cb.addEventListener('change', ()=>
-    document.getElementById(cb.dataset.layer).hidden=!cb.checked));
-  fit();
+  stage.addEventListener('pointermove', e=>{{ if(drag){{
+    tx=e.clientX-drag.x; ty=e.clientY-drag.y; apply(); }} }});
+  stage.addEventListener('pointerup', ()=>{{ drag=null; queueBake(); }});
+  document.querySelectorAll('#panel input').forEach(cb=>cb.addEventListener('change', ()=>{{
+    on[cb.dataset.layer]=cb.checked; drawOverview(); bake(); }}));
 </script>
 """)
     print(f"wrote {OUT} ({OUT.stat().st_size:,} bytes)")
