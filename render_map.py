@@ -157,10 +157,14 @@ def main():
             base.append(f'<path d="{" ".join(polygon_ds(g))}" fill="#dce8d8" fill-rule="evenodd"/>')
     for name, cls, line in osm["streets"]:
         g = ll_to_page(line).simplify(1.5).intersection(frame)
+        # data-name is inert in print but lets the borders review page
+        # show street names on hover
+        nm = (' data-name="' + name.replace("&", "&amp;").replace('"', "&quot;")
+              + '"') if name else ""
         for part in getattr(g, "geoms", [g]):
             if isinstance(part, LineString):
                 base.append(f'<path d="{path_d(part.coords)}" fill="none" '
-                            f'stroke="#d8d2c6" stroke-width="{stroke_w[cls]}"/>')
+                            f'stroke="#d8d2c6" stroke-width="{stroke_w[cls]}"{nm}/>')
     base.append(f'<path d="{" ".join(polygon_ds(city_pg))}" fill="none" '
                 f'stroke="#8a8378" stroke-width="3" stroke-dasharray="14 10"/>')
     L1.group(base)
@@ -377,8 +381,23 @@ def main():
         parts = [p for p in getattr(stroke, "geoms", [stroke])
                  if isinstance(p, LineString)]
         mean_dev, max_dev = _dev_stats(stroke, run) if kind else (0.0, 0.0)
+        # for unannotated runs, record the best near-miss so measure.py
+        # can flag borders that ride a real feature yet render "nothing"
+        cand_kind, cand_name, cand_ratio, cand_r14 = "", "", 0.0, 0.0
+        if not kind:
+            for idx in tree.query(run.buffer(24)):
+                fk, fn, fg = feats[idx]
+                r = run.intersection(fg.buffer(24)).length / run.length
+                if r > cand_ratio:
+                    cand_kind, cand_name, cand_ratio = fk, fn, r
+                    # coverage at classify's own tol separates "tol too
+                    # tight" from "demoted later in draw_run"
+                    cand_r14 = (run.intersection(fg.buffer(14)).length
+                                / run.length)
         borders_debug.append({
             "tag": tag, "kind": kind, "name": fname,
+            "cand_kind": cand_kind, "cand_name": cand_name,
+            "cand_ratio": round(cand_ratio, 2), "cand_r14": round(cand_r14, 2),
             "run_len": round(run.length, 1),
             "stroke_len": round(sum(p.length for p in parts), 1),
             "mean_dev": round(mean_dev, 1), "max_dev": round(max_dev, 1),

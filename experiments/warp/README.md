@@ -36,7 +36,7 @@ neighborhood shapes (spill/coverage are ink-pixel ratios):
 |---|---|
 | Spill (ink outside polygon / total ink) | ≤ 0.5% |
 | Coverage (inked share of polygon area) | ≥ 35% (baseline ≈ see below; rainbow original eyeballs ≈ 50%) |
-| Legibility | manual: letters in reading order, per-glyph x/y scale ratio within [0.4, 2.5], no glyph collisions |
+| Legibility | manual: letters in reading order, per-glyph x/y scale ratio within [0.4, 3.0] (raised from 2.5, user OK 2026-07-22: "Brickbottom could be bigger"), no glyph collisions |
 | Determinism / runtime | same input → same output; < 5 s for all 19 |
 
 ## The loop
@@ -100,6 +100,13 @@ Anything written here is treated as the spec on the next iteration.
 - Hillside: try breaking the word — HILL and SIDE as two separate, very
   close words (user suggestion 2026-07-22); escalate to FFD if that's
   not enough.
+- Region-split words must read as one label: flow the same reading
+  direction (HILL rotated 180° to match SIDE — user 2026-07-22) and keep
+  the font-size ratio between words ≤ ~2.2 (user: PORTER vs SQUARE
+  contrast too big).
+- A word must not visually break into lines: cap baseline steps between
+  adjacent letters (user 2026-07-22: the S in BALL SQUARE's SQUARE
+  detached onto "its own line").
 
 ## Results log
 
@@ -112,3 +119,6 @@ Anything written here is treated as the spec on the next iteration.
 | 2026-07-22 | envelope v2 (continuous warp: shared advance-edge samples, piecewise-linear inside glyphs; wider interline band) | 25.0% | 3.2% (Boynton Yards) | ransom-note jumps gone; letter tops flow with the shape. Remaining: partitions scored before geometric shrink, so Inner Belt (9.7%)/Ten Hills (12.6%) keep collapsed layouts; straight baselines leave bellies empty below and spill where the baseline exits the polygon (Boynton). Next lever: two-sided envelope — per-glyph baseline follows the lower boundary. |
 | 2026-07-22 | envelope v3 (two-sided: bottoms follow the lower boundary; post-shrink partition re-scoring; shared interline splits; pairwise row-collision shrink; floating early lines) | 35.0% | 3.4% (Spring Hill) | **coverage bar met** (median 35.0% ≥ 35%). Inner Belt 30.8%, Ten Hills 35.7%, Twin City 32.3% (single line, lovely). Open: spill bar missed in 8 cells (worst 3.4%, glyphs poke slanted boundaries between samples); Porter Square's stacked lines read tangled on the steep diagonal even though rows don't touch — likely wants a single line or abbreviation; Hillside (19.6%) still the bent-shape holdout. |
 | 2026-07-22 | envelope v4 (dense samples, margin 3, asymmetric taper-window fit, growth pass, floating past center) | 32.0% | 0.6% (Porter Square) | **spill bar effectively met** (18/19 ≤ 0.2%); Ten Hills untangled; INNER fills its corner. Costs: taper trims gave back coverage (Ball Square 23.1%, −3pt median vs v3) — bars now trade against each other. TEELE's T still wedge-crushed (room check permits 50% one-sided compression); Hillside tail still mush (bent shape needs FFD); Porter still stacks on the steep sliver. Next: within-glyph envelope-slope cap for glyph coherence; revisit trim thresholds to win coverage back. |
+| 2026-07-22 | envelope v5 (glyph coherence 1.6×, per-glyph de-skew ±11°, retuned trims, gray borders + #333 ink, HILL/SIDE break) | 31.4% | 0.6% (Porter Square) | de-skew works — TWIN CITY/DAVIS/UNION letters upright (user calls addressed for R, U). Misses: TEELE's T now *vanishes* (coherence cap shrank it to its worst sample; T:E height ratio ~1:4 — needs a word-level height-gradient cap + room-aware line placement); HILL/SIDE both landed tangled in Hillside's upper leg, lower rectangle empty — region assignment (FFD) is the real fix, approved and queued. |
+| 2026-07-22 | envelope v6 (word-level height cap ≤1.5×, relative taper floor w/ sliver guard, lobe region-split for Hillside/Ball Sq/Porter Sq, disjoint regions, growth cap ×1.1, borders #888/4px) | 31.2% | 1.0% (Ball Sq, Hillside) | taste sweep: TEELE's T fully readable; Porter finally clean (PORTER in the tip, SQUARE down the sliver); Hillside 31.0% with HILL/SIDE in its two legs; North Point sliver-guard restored (31.7%); letters upright everywhere. Worst cell now Brickbottom 22.8%. Coverage vs bars: median 31.2% is honest ink (no collisions/spill inflating it); next coverage levers: Brickbottom/Duck Village/East Somerville single-axis conservatism. |
+| 2026-07-22 | envelope v7 (HILL true-180° rotation, word baseline-step cap ±0.25s two-way, stretch bound 2.5→3.0, region size-ratio ≤2.2) | 32.8% | 1.0% (Ball Square) | all four user notes fixed: HILL flows with SIDE (upright glyphs — first attempt mirrored them, both axes must flip); SQUARE's S reattached; Brickbottom bigger (27.4%, was 22.8); PORTER:SQUARE ratio moderated. Worst cell 25.5%. |

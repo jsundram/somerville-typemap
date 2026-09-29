@@ -1,0 +1,42 @@
+runs: 96   border length: 23,222px
+annotated: 67%   labeled: 67%
+  street      47 runs    9,842px  mean_dev avg   2.2px
+  (nothing)   29 runs    7,708px
+  path         7 runs    1,726px  mean_dev avg   5.2px
+  rail         5 runs    1,189px  mean_dev avg   1.8px
+  waterbody    4 runs    1,518px  mean_dev avg   0.0px
+  water        4 runs    1,239px  mean_dev avg   3.1px
+
+missed annotations — (nothing) runs with a feature covering ≥60% (1,904px):
+border                                     cand    name                     @24px @14px    len
+Ten Hills | Winter Hill                    street  Bailey Road                67%   61%    469
+Assembly Square | Ten Hills                street  Fellsway                  100%   96%    303
+Porter Square | Spring Hill                street  Cedar Avenue               63%   51%    156
+Assembly Square | city limit               waterbody Mystic River              100%  100%    146
+East Somerville | city limit               street  Caldwell Street            98%   79%    146
+Winter Hill | city limit                   street  Fremont Street             65%    0%    134
+Ball Square | city limit                   street  Bristol Road               91%   25%    123
+Ball Square | city limit                   street  Broadway                  100%   74%    123
+Twin City | city limit                     street  Gore Street                70%   51%    120
+Brickbottom | East Somerville              street  Washington Street          76%   50%     98
+Assembly Square | city limit               waterbody Mystic River              100%   33%     39
+Winter Hill | city limit                   waterbody Mystic River              100%    0%     28
+Assembly Square | Winter Hill              street  Mystic Avenue             100%  100%     20
+
+worst-aligned runs (mean_dev over bar, or top offenders):
+border                                     kind    name                      mean   max    len
+Assembly Square | East Somerville          street  Mystic Avenue             11.2  17.1    568 ⚠
+Brickbottom | Union Square                 street  McGrath Highway           10.6  11.7    185 ⚠
+Magoun Square | Spring Hill                path    Somerville Community Pa    9.7  14.0    278 ⚠
+Spring Hill | Winter Hill                  path    Somerville Community Pa    9.4  10.6    233 ⚠
+Assembly Square | city limit               water   Mystic River               8.4  20.0    146 ⚠
+Duck Village | city limit                  street  Beacon Street              7.9  20.0    226
+Union Square | Winter Hill                 path    Somerville Community Pa    7.7  11.6    384
+Powder House Square | city limit           street  Pearson Road               6.9  12.6    320
+Brickbottom | Twin City                    street  McGrath Highway            6.1   7.0    229
+Porter Square | Spring Hill                street  Summer Street              5.2  19.5    156
+Porter Square | Spring Hill                street  Linden Avenue              5.1  20.0    156
+Porter Square | Spring Hill                street  Somerville Avenue          4.7  10.2    156
+North Point | Twin City                    path    Somerville Community Pa    4.5   5.0    117
+Brickbottom | Inner Belt                   path    Somerville Community Pa    4.0  10.1    421
+East Somerville | Union Square             street  McGrath Highway            3.9   6.0    258
