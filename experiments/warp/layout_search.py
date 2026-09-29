@@ -6,8 +6,11 @@ choices instead of bending letters:
   - text candidates: the full name + config HERO_VARIANTS, with the
     SQUARE→SQ rule (HERO_ABBREVIATIONS) applied to every form, and every
     allowed line break (spaces; "-" marks optional hyphenated breaks);
-  - axis: the polygon's long axis (phase 2). Phase 3 adds an angle sweep,
-    region splits and outline-level containment; phase 6 curved baselines.
+  - angle: min-rect long axis, the longest straight edges, horizontal,
+    and a 15° sweep (phase 3a);
+  - placement: each line at its own position across the shape (3a).
+  Still to come: region splits, reading-order check (3b); curved
+  baselines (phase 6).
 
 Each candidate is sized line by line: a line sits in a band as tall as
 its cap height, and gets the widest interval along the axis where the
@@ -22,7 +25,7 @@ import math
 import sys
 from pathlib import Path
 
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import Polygon
 
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
@@ -30,11 +33,15 @@ sys.path.insert(0, str(ROOT))
 from config.words import HERO_ABBREVIATIONS, HERO_VARIANTS  # noqa: E402
 
 # score penalties (fractions of ink): the full name should win ties
-PENALTY = {"abbrev": 0.08, "hyphen": 0.12, "variant": 0.04}
+PENALTY = {"abbrev": 0.08, "hyphen": 0.12, "variant": 0.04,
+           "tilt": 0.06}  # × |sin angle|: horizontal reads easiest
 MAX_LINES = 3
 LEADING = 0.30   # gap between stacked lines, as a fraction of cap height
 MARGIN = 3.0     # px kept clear of the polygon edge
 MAX_SIZE = 220   # em size cap (px)
+MIN_SIZE = 6     # below this a candidate is infeasible
+GRID = 160       # raster cells across the shape's longer extent
+ANGLE_STEP = 15  # degrees, coarse sweep
 MAX_RATIO = 2.0  # biggest line ≤ 2× the smallest — one label, not a headline
                  # + footnote (run 1: SQ dwarfed ASSEMBLY, MA- dwarfed GOUN)
 
@@ -119,33 +126,80 @@ class Metrics:
 
 # --- geometry ----------------------------------------------------------------
 
-def principal_axis(polygon):
-    """(u, p): long axis of the min rotated rect, reading left→right,
-    p pointing screen-down."""
-    mrr = polygon.minimum_rotated_rectangle
-    cs = list(mrr.exterior.coords)[:4]
-    edges = [(cs[i], cs[(i + 1) % 4]) for i in range(4)]
-    (ax, ay), (bx, by) = max(edges, key=lambda e: math.dist(*e))
-    L = math.dist((ax, ay), (bx, by))
-    ux, uy = (bx - ax) / L, (by - ay) / L
-    if ux < 0:
+def axis(theta):
+    """(u, p) for baseline angle theta (radians, screen coords): u reads
+    left→right (bottom→top when vertical), p points screen-down."""
+    ux, uy = math.cos(theta), math.sin(theta)
+    if ux < -1e-9 or (abs(ux) <= 1e-9 and uy > 0):
         ux, uy = -ux, -uy
-    px, py = -uy, ux
-    if py < 0:
-        px, py = -px, -py
-    return (ux, uy), (px, py)
+    return (ux, uy), (-uy, ux)
+
+
+def angles(polygon):
+    """Candidate baseline angles: min-rect long axis, the longest straight
+    edges (Brickbottom's long side), horizontal, and a coarse sweep."""
+    out = [0.0] + [math.radians(d) for d in range(0, 180, ANGLE_STEP)]
+    mrr = list(polygon.minimum_rotated_rectangle.exterior.coords)[:4]
+    e = max(zip(mrr, mrr[1:] + mrr[:1]), key=lambda e: math.dist(*e))
+    out.append(math.atan2(e[1][1] - e[0][1], e[1][0] - e[0][0]))
+    ring = list(polygon.simplify(4).exterior.coords)
+    edges = sorted(zip(ring, ring[1:]), key=lambda e: -math.dist(*e))
+    out += [math.atan2(b[1] - a[1], b[0] - a[0]) for a, b in edges[:3]]
+    uniq = []
+    for th in out:
+        th %= math.pi
+        if all(min(abs(th - q), math.pi - abs(th - q)) > math.radians(2)
+               for q in uniq):
+            uniq.append(th)
+    return uniq
 
 
 class Frame:
-    """Axis-aligned view of a polygon: t along u, v along p."""
+    """A polygon seen along one baseline angle: t along u, v along p,
+    rasterized so band queries are array ops.
+
+    free[r, j]: how many consecutive inside cells start at row r going
+    down (screen-down = +v) — a band of hr rows fits at (r, j) iff
+    free[r, j] >= hr. widest(hr) gives, for every start row, the widest
+    run of such columns: one numpy pass per band height, cached.
+    """
 
     def __init__(self, polygon, u, p):
+        import numpy as np
+        import shapely
+
         self.poly, self.u, self.p = polygon, u, p
-        self.c = polygon.representative_point()
-        self.reach = math.hypot(*(b - a for a, b in
-                                  zip(polygon.bounds[:2], polygon.bounds[2:])))
-        vs = [self.tv(xy)[1] for xy in polygon.exterior.coords]
-        self.vmin, self.vmax = min(vs), max(vs)
+        self.c = polygon.centroid
+        tv = [self.tv(xy) for xy in polygon.exterior.coords]
+        t0, t1 = min(t for t, _ in tv), max(t for t, _ in tv)
+        v0, v1 = min(v for _, v in tv), max(v for _, v in tv)
+        self.res = max(t1 - t0, v1 - v0) / GRID
+        self.tmin, self.vmin = t0, v0
+        nt = int((t1 - t0) / self.res) + 1
+        nv = int((v1 - v0) / self.res) + 1
+        tt = t0 + (np.arange(nt) + 0.5) * self.res
+        vv = v0 + (np.arange(nv) + 0.5) * self.res
+        T, V = np.meshgrid(tt, vv)
+        X = self.c.x + u[0] * T + p[0] * V
+        Y = self.c.y + u[1] * T + p[1] * V
+        inside = shapely.contains_xy(polygon, X, Y)
+        free = np.zeros(inside.shape, dtype=np.int32)
+        free[-1] = inside[-1]
+        for r in range(nv - 2, -1, -1):
+            free[r] = (free[r + 1] + 1) * inside[r]
+        self.free, self.np = free, np
+        self._cache = {}
+
+    def widest(self, hr):
+        """(run_len, end_col) arrays over start rows for bands of hr rows."""
+        if hr not in self._cache:
+            np = self.np
+            m = self.free >= hr
+            c = np.cumsum(m, axis=1)
+            base = np.maximum.accumulate(np.where(~m, c, 0), axis=1)
+            run = c - base
+            self._cache[hr] = (run.max(axis=1), run.argmax(axis=1))
+        return self._cache[hr]
 
     def tv(self, xy):
         dx, dy = xy[0] - self.c.x, xy[1] - self.c.y
@@ -155,29 +209,6 @@ class Frame:
         return (self.c.x + self.u[0] * t + self.p[0] * v,
                 self.c.y + self.u[1] * t + self.p[1] * v)
 
-    def intervals(self, v):
-        """t-intervals where the horizontal-in-frame line at v is inside."""
-        R = self.reach
-        cut = LineString([self.xy(-R, v), self.xy(R, v)]).intersection(self.poly)
-        out = []
-        for g in getattr(cut, "geoms", [cut]):
-            if isinstance(g, LineString) and not g.is_empty:
-                a, b = self.tv(g.coords[0])[0], self.tv(g.coords[-1])[0]
-                out.append((min(a, b), max(a, b)))
-        return out
-
-    def band(self, v0, v1, samples=5):
-        """t-intervals where the whole band v0..v1 is inside (sampled)."""
-        acc = None
-        for k in range(samples):
-            iv = self.intervals(v0 + (v1 - v0) * k / (samples - 1))
-            acc = iv if acc is None else [
-                (max(a, c), min(b, d)) for a, b in acc for c, d in iv
-                if min(b, d) > max(a, c)]
-            if not acc:
-                return []
-        return acc
-
     def box(self, t0, t1, v0, v1):
         return Polygon([self.xy(t0, v0), self.xy(t1, v0),
                         self.xy(t1, v1), self.xy(t0, v1)])
@@ -186,55 +217,121 @@ class Frame:
 # --- layout ------------------------------------------------------------------
 
 def fit_lines(frame, lines, M):
-    """Size and place `lines` as a centered stack. Returns rows or None.
+    """Place `lines` top to bottom, each at its own position across the
+    shape (not a fixed centered stack — user notes: DUCK/VILLAGE want
+    more space between them, Brickbottom wants to hug its long side).
 
-    Fixed point: each line's size depends on its band's free width, and
-    the band's position depends on every line's size.
+    1. Binary-search the largest common size s where the lines fit in
+       order: each line takes the earliest row where a band of its cap
+       height has a run ≥ its width (earliest-fit is optimal for an
+       ordered packing), then a leading gap.
+    2. Spread: each line re-centers in the window its neighbors allow.
+    3. Grow: each line grows (≤ MAX_RATIO × s) within its window.
+    Returns rows or None.
     """
-    fit_poly = frame.poly
+    res = frame.res
     adv = [M.advance(ln) for ln in lines]
-    height = frame.vmax - frame.vmin
-    n = len(lines)
-    sizes = [min(MAX_SIZE, height / (n * M.cap * (1 + LEADING)))] * n
-    rows = None
-    for _ in range(8):
-        hs = [s * M.cap for s in sizes]
-        total = sum(hs) + LEADING * sum((a + b) / 2 for a, b in zip(hs, hs[1:]))
-        # center the stack on the frame's vertical middle of the free space
-        v = (frame.vmin + frame.vmax) / 2 - total / 2
-        rows, new = [], []
-        for i, (ln, h) in enumerate(zip(lines, hs)):
-            ivs = frame.band(v, v + h)
-            best = max(ivs, key=lambda iv: iv[1] - iv[0], default=None)
-            w = (best[1] - best[0]) if best else 0.0
-            new.append(max(0.0, min(MAX_SIZE, w / adv[i])) if adv[i] else 0.0)
-            rows.append({"line": ln, "v0": v, "v1": v + h, "iv": best})
-            v += h + (LEADING * (h + hs[i + 1]) / 2 if i + 1 < n else 0)
-        if all(abs(a - b) < 0.5 for a, b in zip(sizes, new)):
-            break
-        # damped: shrinking one line can free height for the others
-        sizes = [0.5 * a + 0.5 * b for a, b in zip(sizes, new)]
-    for r, s, a in zip(rows, sizes, adv):
-        if r["iv"] is None or s <= 0:
+    nv = frame.free.shape[0]
+
+    def need(s, a):  # (band rows, run cols) for a line of size s
+        return (max(1, math.ceil(s * M.cap / res)), math.ceil(s * a / res))
+
+    def gap(s):
+        return math.ceil(LEADING * s * M.cap / res)
+
+    def rows_ok(s, a):
+        hr, wr = need(s, a)
+        if hr > nv:
             return None
-        r["size"] = s
+        run, _ = frame.widest(hr)
+        return run >= wr
+
+    def pack(s):
+        """Earliest-fit start rows at common size s, or None."""
+        starts, cur = [], 0
+        for a in adv:
+            ok = rows_ok(s, a)
+            if ok is None:
+                return None
+            idx = frame.np.flatnonzero(ok[cur:])
+            if not len(idx):
+                return None
+            r = cur + int(idx[0])
+            starts.append(r)
+            cur = r + need(s, a)[0] + gap(s)
+        return starts
+
+    lo, hi = 0.0, MAX_SIZE
+    if pack(MIN_SIZE) is None:
+        return None
+    lo = MIN_SIZE
+    for _ in range(14):
+        mid = (lo + hi) / 2
+        if pack(mid) is not None:
+            lo = mid
+        else:
+            hi = mid
+    floor = lo
+    sizes = [floor] * len(lines)
+    starts = pack(floor)
+
+    # spread + grow, top to bottom; the window for line i runs from the
+    # end of line i-1 to where lines i+1.. still fit (latest-fit bound)
+    def latest_bound(i, s_list, starts):
+        """Last start row for line i so lines i+1.. still fit below."""
+        end = nv
+        for k in range(len(lines) - 1, i, -1):
+            ok = rows_ok(s_list[k], adv[k])
+            hr = need(s_list[k], adv[k])[0]
+            idx = frame.np.flatnonzero(ok[:max(0, end - hr + 1)])
+            if not len(idx):
+                return None
+            end = int(idx[-1]) - gap(s_list[k])
+        return end - need(s_list[i], adv[i])[0] + 1
+
+    cur = 0
+    for i, a in enumerate(adv):
+        best = None
+        s = sizes[i]
+        while s <= min(MAX_SIZE, MAX_RATIO * floor) + 1e-9:
+            trial = sizes[:i] + [s] + sizes[i + 1:]
+            last = latest_bound(i, trial, starts)
+            ok = rows_ok(s, a)
+            if ok is None or last is None or last < cur:
+                break
+            idx = frame.np.flatnonzero(ok[cur:last + 1])
+            if not len(idx):
+                break
+            cand = cur + idx
+            # center of the feasible stretch nearest the window's middle
+            mid = (cur + last) / 2
+            best = (s, int(cand[frame.np.argmin(abs(cand - mid))]))
+            s *= 1.04
+        if best is None:
+            return None
+        sizes[i], starts[i] = best
+        cur = starts[i] + need(sizes[i], a)[0] + gap(sizes[i])
+
+    rows = []
+    for ln, s, a, r0 in zip(lines, sizes, adv, starts):
+        hr, _ = need(s, a)
+        run, end = frame.widest(hr)
+        L, e = int(run[r0]), int(end[r0])
+        c0 = frame.tmin + (e - L + 1) * frame.res
+        c1 = frame.tmin + (e + 1) * frame.res
         w = s * a
-        a0, a1 = r["iv"]
-        mid = min(max((a0 + a1) / 2, a0 + w / 2), a1 - w / 2)
-        r["t0"], r["t1"] = mid - w / 2, mid + w / 2
-    # one label: clamp lines far bigger than the smallest, about their centers
-    floor = min(r["size"] for r in rows)
-    for r in rows:
-        if r["size"] > MAX_RATIO * floor:
-            _scale_row(r, MAX_RATIO * floor / r["size"])
-    # exact check: every row's box inside; shrink offenders
+        mid = (c0 + c1) / 2
+        v0 = frame.vmin + r0 * frame.res
+        rows.append({"line": ln, "size": s, "t0": mid - w / 2, "t1": mid + w / 2,
+                     "v0": v0, "v1": v0 + s * M.cap})
+    # exact check (the raster is ± one cell): shrink offenders
     for _ in range(30):
-        bad = [r for r in rows
-               if not frame.box(r["t0"], r["t1"], r["v0"], r["v1"]).within(fit_poly)]
+        bad = [r for r in rows if not frame.box(
+            r["t0"], r["t1"], r["v0"], r["v1"]).within(frame.poly)]
         if not bad:
             return rows
         for r in bad:
-            _scale_row(r, 0.95)
+            _scale_row(r, 0.96)
     return None
 
 
@@ -247,28 +344,33 @@ def _scale_row(r, f):
 
 
 def search(polygon, name, M):
-    """Best layout for `name` in `polygon`: (rows, frame, lines, penalty)."""
+    """Best layout for `name` in `polygon` over candidates × angles."""
     inner = polygon.buffer(-MARGIN)
     if inner.is_empty:
         return None
     if inner.geom_type == "MultiPolygon":
         inner = max(inner.geoms, key=lambda g: g.area)
-    u, p = principal_axis(inner)
-    frame = Frame(inner, u, p)
+    cands = candidates(name)
     best = None
-    for lines, pen in candidates(name):
-        rows = fit_lines(frame, lines, M)
-        if not rows:
-            continue
-        ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"]) for r in rows)
-        # legibility first (smallest line), ink as a ~1% tiebreak
-        floor = min(r["size"] for r in rows)
-        score = floor * (1 - pen) * (1 + 0.01 * ink / frame.poly.area)
-        if best is None or score > best[0]:
-            best = (score, rows, lines, pen)
+    for th in angles(inner):
+        u, p = axis(th)
+        frame = Frame(inner, u, p)
+        tilt = PENALTY["tilt"] * abs(math.sin(th))
+        for lines, pen in cands:
+            rows = fit_lines(frame, lines, M)
+            if not rows:
+                continue
+            ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"]) for r in rows)
+            # legibility first (smallest line), ink as a ~1% tiebreak
+            floor = min(r["size"] for r in rows)
+            score = (floor * (1 - pen) * (1 - tilt)
+                     * (1 + 0.01 * ink / inner.area))
+            if best is None or score > best[0]:
+                best = (score, rows, lines, pen, frame, th)
     if best is None:
         return None
-    return {"rows": best[1], "frame": frame, "lines": best[2], "penalty": best[3]}
+    return {"rows": best[1], "frame": best[4], "lines": best[2],
+            "penalty": best[3], "angle": math.degrees(best[5])}
 
 
 def render(doc, result, M, fill):

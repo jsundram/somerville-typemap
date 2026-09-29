@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["shapely>=2.0", "fonttools>=4.50"]
+# dependencies = ["shapely>=2.0", "fonttools>=4.50", "numpy"]
 # ///
 """Render a contact sheet of hero-label algorithms over the real shapes.
 
