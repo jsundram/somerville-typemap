@@ -11,6 +11,7 @@ Outputs:
   out/layers/L4_adjacent.svg   Medford / Cambridge / Charlestown / …
   out/layers/L5_heroes.svg     fitted neighborhood hero typography
   out/layers/L6_typography.svg streets / parks / water as text
+  out/layers/L9_perceived.svg  perceived borders (the line locals draw)
   out/somerville.svg           combined print map (all-text layers, no basemap)
 """
 
@@ -23,9 +24,11 @@ from shapely.geometry import LineString, MultiLineString, Point, shape
 from shapely.ops import linemerge, substring, transform, unary_union
 
 from config.style import HERO_CYCLE, LAYERS, PAPER
-from config.words import (LINE_COLORS, PATH_FAMILY, RAIL_MAINLINES, RAIL_RENAME,
+from config.words import (LINE_COLORS, PATH_FAMILY, PERCEIVED_BORDERS,
+                          PERCEIVED_LABELS, RAIL_MAINLINES, RAIL_RENAME,
                           STATION_LINES, TOWNS, WORD_OVERRIDES)
-from typemap.borders import _clean_lines, classify, shared_borders, split_chunks
+from typemap.borders import (_clean_lines, chain_route, classify,
+                             shared_borders, split_chunks)
 from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
 from typemap.osm import load_layers, _relation_polygon
@@ -513,6 +516,34 @@ def main():
     (ROOT / "out/borders_debug.json").write_text(json.dumps(
         {"runs": borders_debug}, indent=1))
 
+    # ── L9 perceived borders: the line locals draw (Cambridge St →
+    # Beacon → Somerville Ave → Mass Ave), not the legal one
+    L9 = layer("L9_perceived")
+    pst = LAYERS["perceived"]
+    wanted = {n for b in PERCEIVED_BORDERS for n in b["route"]}
+    route_streets = [(name, ll_to_page(line).intersection(frame))
+                     for name, _, line in osm["streets"] if name in wanted]
+    for border in PERCEIVED_BORDERS:
+        pieces = chain_route(route_streets, border["route"],
+                             border["start"], border["end"])
+        whole = linemerge(MultiLineString([p for _, p in pieces]))
+        for part in getattr(whole, "geoms", [whole]):
+            L9.raw(f'<path d="{path_d(part.simplify(1.5).coords)}" fill="none" '
+                   f'stroke="{pst["band"]}" stroke-width="{pst["band_width"]}" '
+                   f'stroke-opacity="{pst["band_opacity"]}" '
+                   f'stroke-linecap="round" stroke-linejoin="round"/>')
+        style = {k: v for k, v in pst.items() if not k.startswith("band")}
+        for name, piece in pieces:
+            label = PERCEIVED_LABELS.get(name, name).upper()
+            if piece.length < est_width(label, pst["font_size"]) * 1.2:
+                continue
+            coords = list(piece.simplify(1.5).coords)
+            if coords[-1][0] < coords[0][0]:
+                coords.reverse()
+            text = repeat_to_length(label, piece.length * 0.94,
+                                    pst["font_size"], sep="  ·  ")
+            L9.text_on_path(path_d(coords), text, style)
+
     # ── L5 neighborhood hero typography (fitted, not just a curve)
     L5 = layer("L5_heroes")
     for name, geom in hoods_pg:
@@ -584,7 +615,8 @@ def main():
         doc.write(outdir / f"{key}.svg")
         print(f"wrote {outdir / f'{key}.svg'}")
     print_order = ["L4_adjacent", "L2_neighborhoods", "L7_boundaries",
-                   "L8_annotations", "L6_typography", "L3_transit", "L5_heroes"]
+                   "L8_annotations", "L9_perceived", "L6_typography", "L3_transit",
+                   "L5_heroes"]
     write_combined(ROOT / "out/somerville.svg", [docs[k] for k in print_order],
                    PAGE_W, page_h, background=PAPER)
     print(f"wrote {ROOT / 'out/somerville.svg'} ({PAGE_W}×{page_h})")

@@ -75,3 +75,21 @@ TOWNS = {
     "Malden": {"color": "#d13c8f"},
     "Chelsea": {"color": "#8a8378"},
 }
+
+# Perceived borders: the line locals draw, as opposed to the legal one.
+# Each route follows the named streets in order (junction to junction);
+# the first/last street run out toward start/end. Not accurate —
+# semantically useful (user, 2026-09-29: "my mental map … Cambridge St to
+# Beacon St to Somerville Ave to Mass Ave as the edge with Cambridge").
+PERCEIVED_BORDERS = [
+    {
+        "town": "Cambridge",
+        "route": ["Cambridge Street", "Beacon Street", "Somerville Avenue",
+                  "Massachusetts Avenue"],
+        "start": "east",
+        "end": "west",
+    },
+]
+
+# How a street is named along a perceived border.
+PERCEIVED_LABELS = {"Massachusetts Avenue": "Mass Ave"}

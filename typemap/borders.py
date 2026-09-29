@@ -82,3 +82,111 @@ def split_chunks(line: LineString, max_len: float = 220.0) -> list[LineString]:
     n = max(1, math.ceil(line.length / max_len))
     step = line.length / n
     return [substring(line, k * step, (k + 1) * step) for k in range(n)]
+
+
+def chain_route(streets, sequence, start_dir, end_dir, bridge=60.0, snap=15.0):
+    """One polyline following named streets in order — a *perceived*
+    border (the line locals draw), not an administrative one.
+
+    streets: [(name, LineString)] in page coords. sequence: street names
+    in travel order. Each street is walked (shortest path over its own
+    segments) from the junction with the previous street to the junction
+    with the next; the first/last street run out to their extreme node in
+    start_dir/end_dir ("east"/"west"/"north"/"south"). Junction gaps up to
+    `bridge` px (Cambridge St → Beacon St at Inman) are bridged straight.
+    Returns [(name, LineString)] — one piece per street, in order.
+    """
+    import heapq
+
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+
+    key = {"east": lambda p: p[0], "west": lambda p: -p[0],
+           "south": lambda p: p[1], "north": lambda p: -p[1]}
+
+    def graph(name):
+        adj = {}
+        ends = []
+        for n, line in streets:
+            if n != name:
+                continue
+            for part in getattr(line, "geoms", [line]):
+                if not isinstance(part, LineString) or part.is_empty:
+                    continue
+                cs = [(round(x, 1), round(y, 1)) for x, y in part.coords]
+                ends += [cs[0], cs[-1]]
+                for a, b in zip(cs, cs[1:]):
+                    d = math.dist(a, b)
+                    adj.setdefault(a, []).append((b, d))
+                    adj.setdefault(b, []).append((a, d))
+        # clipping and dual carriageways leave near-touching ends
+        for i, a in enumerate(ends):
+            for b in ends[i + 1:]:
+                d = math.dist(a, b)
+                if 0 < d <= snap:
+                    adj[a].append((b, d))
+                    adj[b].append((a, d))
+        return adj
+
+    def dijkstra(adj, src):
+        dist, prev, pq = {src: 0.0}, {}, [(0.0, src)]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if d > dist[u]:
+                continue
+            for v, w in adj[u]:
+                if d + w < dist.get(v, math.inf):
+                    dist[v], prev[v] = d + w, u
+                    heapq.heappush(pq, (d + w, v))
+        return dist, prev
+
+    def walk(prev, dst):
+        out = [dst]
+        while out[-1] in prev:
+            out.append(prev[out[-1]])
+        return out[::-1]
+
+    graphs = {n: graph(n) for n in sequence}
+    geoms = {n: MultiLineString([LineString(list(graph_line))
+                                 for graph_line in _edges(graphs[n])])
+             for n in sequence}
+
+    def nearest_node(adj, pt):
+        return min(adj, key=lambda q: math.dist(q, pt))
+
+    # junction points between consecutive streets
+    joins = []
+    for a, b in zip(sequence, sequence[1:]):
+        pa, pb = nearest_points(geoms[a], geoms[b])
+        if pa.distance(pb) > bridge:
+            raise ValueError(f"{a} and {b} don't meet (gap {pa.distance(pb):.0f}px)")
+        joins.append(((pa.x, pa.y), (pb.x, pb.y)))
+
+    pieces = []
+    for i, name in enumerate(sequence):
+        adj = graphs[name]
+        src = nearest_node(adj, joins[i - 1][1]) if i else None
+        dst = nearest_node(adj, joins[i][0]) if i < len(sequence) - 1 else None
+        if src is None:  # first street: run out to its start_dir extreme
+            dist, prev = dijkstra(adj, dst)
+            src = max(dist, key=key[start_dir])
+            path = walk(prev, src)[::-1]
+        else:
+            dist, prev = dijkstra(adj, src)
+            if dst is None:
+                dst = max(dist, key=key[end_dir])
+            path = walk(prev, dst)
+        if pieces and i:  # bridge the junction gap onto this piece
+            path = [pieces[-1][1].coords[-1]] + path
+        if len(path) >= 2:
+            pieces.append((name, LineString(path)))
+    return pieces
+
+
+def _edges(adj):
+    seen = set()
+    for a, nbrs in adj.items():
+        for b, _ in nbrs:
+            if (b, a) not in seen:
+                seen.add((a, b))
+                yield (a, b)

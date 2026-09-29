@@ -106,6 +106,21 @@ LAYERS = {
         "stroke_width": 3.5,
         "paint_order": "stroke",
     },
+    # Perceived borders (the line locals draw): a soft band under the
+    # street, its name repeated along it
+    "perceived": {
+        "band": "#e8a02a",
+        "band_width": 16,
+        "band_opacity": 0.35,
+        "font_size": 12,
+        "font_family": BODY_FONT,
+        "font_weight": "700",
+        "fill": "#9a6412",
+        "letter_spacing": 1.5,
+        "stroke": PAPER,
+        "stroke_width": 3,
+        "paint_order": "stroke",
+    },
     # Neighborhood hero labels — big, arched, layered over everything
     "hero": {
         "font_size": 58,
