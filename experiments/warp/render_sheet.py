@@ -21,6 +21,7 @@ from shapely.affinity import scale as ascale, translate
 
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from typemap.fills import (PER_CHAR_HERO, _partitions, _polygons,  # noqa: E402
                            fitted_hero, polygon_ds)
@@ -635,11 +636,28 @@ def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=3.0,
             doc.raw(f'<path d="{pen.getCommands()}" fill="{HERO_STYLE["fill"]}"/>')
 
 
+# per-cell extras an algorithm may report (label chosen, min cap height)
+CELL_INFO = {}
+
+
+def algo_search(doc, polygon, name):
+    """Layout search over undistorted glyphs (README algorithm 4)."""
+    import layout_search as ls
+
+    M = ls.Metrics(_glyphs())
+    res = ls.search(polygon, name, M)
+    if res is None:
+        return
+    ls.render(doc, res, M, HERO_STYLE["fill"])
+    CELL_INFO.update(label=" / ".join(res["lines"]),
+                     min_cap=round(min(r["size"] for r in res["rows"]) * M.cap, 1))
+
+
 ALGORITHMS = {
     "baseline": algo_baseline,
     "perline": algo_perline,
-    "envelope": algo_envelope,
-    # add: "ffd": quad-strip free-form deformation
+    "envelope": algo_envelope,  # parked at v7 — the number to beat
+    "search": algo_search,
 }
 
 
@@ -666,13 +684,15 @@ def main():
         # border at luminance ≥ 128 (#888 = 136) so measure.py never counts it
         doc.raw(f'<path d="{" ".join(polygon_ds(cell_poly))}" fill="none" '
                 f'stroke="#888888" stroke-width="4" fill-rule="evenodd"/>')
+        CELL_INFO.clear()
         algo(doc, cell_poly, f["name"])
         doc.raw(f'<text x="{cx + 8}" y="{cy + 16}" font-size="12" '
                 f'font-family="monospace" fill="#999999">{f["name"]}</text>')
         layout.append({"name": f["name"],
                        "exterior": list(cell_poly.exterior.coords)
                        if cell_poly.geom_type == "Polygon" else
-                       [list(g.exterior.coords) for g in cell_poly.geoms]})
+                       [list(g.exterior.coords) for g in cell_poly.geoms],
+                       **CELL_INFO})
 
     doc.write(HERE / "sheet.svg")
     (HERE / "sheet_layout.json").write_text(json.dumps(

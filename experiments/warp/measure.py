@@ -34,7 +34,10 @@ def main():
     cell = meta["cell"]
 
     print(f"algorithm: {meta['algorithm']}")
-    print(f"{'neighborhood':<22} {'coverage':>9} {'spill':>7}")
+    extra = any("min_cap" in c for c in meta["cells"])
+    print(f"{'neighborhood':<22} {'coverage':>9} {'spill':>7}"
+          + (f" {'cap px':>7}  label" if extra else ""))
+    caps = []
     coverages, spills = [], []
     for i, c in enumerate(meta["cells"]):
         cx, cy = (i % meta["cols"]) * cell, (i // meta["cols"]) * cell
@@ -57,12 +60,18 @@ def main():
         spill = (ink_total - ink_inside) / ink_total if ink_total else 0.0
         coverages.append(coverage)
         spills.append(spill)
-        print(f"{c['name']:<22} {coverage:>8.1%} {spill:>6.1%}")
+        line = f"{c['name']:<22} {coverage:>8.1%} {spill:>6.1%}"
+        if extra:
+            caps.append(c.get("min_cap", 0))
+            line += f" {c.get('min_cap', 0):>7.1f}  {c.get('label', '—')}"
+        print(line)
 
     print("-" * 40)
     print(f"{'median':<22} {statistics.median(coverages):>8.1%} "
-          f"{statistics.median(spills):>6.1%}")
-    print(f"{'worst':<22} {min(coverages):>8.1%} {max(spills):>6.1%}")
+          f"{statistics.median(spills):>6.1%}"
+          + (f" {statistics.median(caps):>7.1f}" if extra else ""))
+    print(f"{'worst':<22} {min(coverages):>8.1%} {max(spills):>6.1%}"
+          + (f" {min(caps):>7.1f}" if extra else ""))
 
 
 if __name__ == "__main__":
