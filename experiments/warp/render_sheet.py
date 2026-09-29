@@ -50,7 +50,8 @@ def algo_baseline(doc, polygon, name):
 
 # --- shared per-line layout (fitted_hero's chords, one size per line) -----
 
-def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
+def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80,
+                    flip=False):
     """fitted_hero's chord layout with a font size per line.
 
     Taste rules 2026-07-22: each line fits its own chord (partition
@@ -74,6 +75,9 @@ def _perline_layout(polygon, name, max_size=140, min_size=13, cram=0.80):
     px, py = -uy, ux
     if py < 0:  # keep the perpendicular pointing screen-down
         px, py = -px, -py
+    if flip:  # user override: true 180° rotation — BOTH axes flip,
+        # otherwise the glyphs come out mirrored
+        ux, uy, px, py = -ux, -uy, -px, -py
     c = polygon.representative_point()
 
     def chord_at(off):
@@ -343,7 +347,13 @@ def _lobe_regions(polygon, n):
     return regs
 
 
-def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
+# taste rule: per-label words whose reading direction flips 180°
+# (user: HILL must flow the same way as SIDE)
+FLIPS = {"HILLSIDE": {"HILL"}}
+REGION_SIZE_RATIO = 2.2  # user: PORTER vs SQUARE contrast too big
+
+
+def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=3.0):
     """Per-line envelope stretch — see _envelope_render. Lobed shapes in
     REGION_SPLIT split into regions first, one word per lobe, read
     top-to-bottom (user suggestion: HILL and SIDE in Hillside's legs)."""
@@ -353,13 +363,26 @@ def algo_envelope(doc, polygon, name, margin=2.5, max_ratio=2.5):
         if regs:
             order = sorted(range(len(regs)),
                            key=lambda i: (regs[i].centroid.y, regs[i].centroid.x))
-            for idx, w in zip(order, words):
-                _envelope_render(doc, regs[idx], w, margin, max_ratio)
+            pairs = [(regs[idx], w, w in FLIPS.get(name.upper(), ()))
+                     for idx, w in zip(order, words)]
+            # keep the words sized as one label: cap the ratio between
+            # the biggest and smallest word (user: PORTER vs SQUARE)
+            nats = []
+            for reg, w, fl in pairs:
+                l = _perline_layout(reg, w, flip=fl)
+                nats.append(max((r["size"] for r in l["rows"]), default=0)
+                            if l else 0)
+            floor = min((v for v in nats if v > 0), default=0)
+            cap = floor * REGION_SIZE_RATIO if floor else 140
+            for reg, w, fl in pairs:
+                _envelope_render(doc, reg, w, margin, max_ratio,
+                                 flip=fl, max_size=cap)
             return
     _envelope_render(doc, polygon, name, margin, max_ratio)
 
 
-def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=2.5):
+def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=3.0,
+                     flip=False, max_size=140):
     """perline's layout, glyphs as outlines, vertically warped to the
     polygon's local height. The vertical scale is sampled at every
     glyph's advance edges (samples are shared between neighbors, so
@@ -367,7 +390,7 @@ def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=2.5):
     piecewise-linearly inside each glyph."""
     from fontTools.pens.svgPathPen import SVGPathPen
 
-    lay = _perline_layout(polygon, name)
+    lay = _perline_layout(polygon, name, max_size=max_size, flip=flip)
     if lay is None:
         return
     F = _glyphs()
@@ -528,9 +551,9 @@ def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=2.5):
                     f = hs[k] / cur
                     g["tops"] = [t * f for t in g["tops"]]
 
-        # pass 2: bottoms, de-skew, render
+        # pass 2a: bottoms + de-skew per glyph
         for g in glyphs:
-            gname, adv, gx_pen = g["name"], g["adv"], g["x_pen"]
+            adv = g["adv"]
             g_lo, gy1 = g["g_lo"], g["gy1"]
             knots, ups, dns, tops = g["knots"], g["ups"], g["dns"], g["tops"]
             if knots:
@@ -556,7 +579,40 @@ def _envelope_render(doc, polygon, name, margin=2.5, max_ratio=2.5):
                 if band_dn != float("inf") and g_lo < 0:
                     sy0 = min(sy0, band_dn / -g_lo)
                 sy0 = max(sy0, 0.02 * sx)
-                knots, tops, bots = [gx_pen], [sy0], [g_lo * sy0]
+                knots, tops, bots = [g["x_pen"]], [sy0], [g_lo * sy0]
+            g["knots"], g["tops"], g["bots"] = knots, tops, bots
+
+        # pass 2b: word-level baseline-step cap — a letter whose bottom
+        # jumps far from its neighbors reads as its own line (user call:
+        # the S in BALL SQUARE's SQUARE)
+        step = 0.25 * s
+        means = [sum(g["bots"]) / len(g["bots"]) for g in glyphs]
+        order_ = list(range(1, len(glyphs)))
+        for seq in (order_, order_[::-1]):  # both ways so an outlier end
+            for k in seq:                   # glyph is pulled to the word
+                prev = k - 1 if seq is order_ else k + 1
+                if prev < 0 or prev >= len(glyphs):
+                    continue
+                delta = means[k] - means[prev]
+                capped = min(max(delta, -step), step)
+                if capped != delta:
+                    shift = capped - delta
+                    g = glyphs[k]
+                    g["bots"] = [b + shift for b in g["bots"]]
+                    means[k] += shift
+                    if g["ups"]:  # keep the shifted glyph inside its room
+                        g["bots"] = [max(b, -d)
+                                     for b, d in zip(g["bots"], g["dns"])]
+                        g["tops"] = [max(min(t, (u - b) /
+                                             (g["gy1"] - g["g_lo"])),
+                                         0.02 * sx)
+                                     for t, u, b in
+                                     zip(g["tops"], g["ups"], g["bots"])]
+
+        # pass 2c: render
+        for g in glyphs:
+            gname, gx_pen, g_lo = g["name"], g["x_pen"], g["g_lo"]
+            knots, tops, bots = g["knots"], g["tops"], g["bots"]
 
             def interp(x, vals, knots=knots):
                 if x <= knots[0] or len(knots) == 1:

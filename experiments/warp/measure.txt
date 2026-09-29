@@ -1,24 +1,24 @@
 algorithm: envelope
 neighborhood            coverage   spill
-Assembly Square           36.9%   0.0%
-Ball Square               25.9%   1.0%
-Boynton Yards             34.4%   0.1%
-Brickbottom               22.8%   0.0%
-Davis Square              33.3%   0.0%
-Duck Village              26.7%   0.0%
-East Somerville           29.7%   0.0%
-Hillside                  30.8%   1.0%
-Inner Belt                31.2%   0.0%
-Magoun Square             38.2%   0.0%
-North Point               31.7%   0.0%
-Porter Square             24.4%   0.0%
+Assembly Square           38.1%   0.1%
+Ball Square               27.4%   0.9%
+Boynton Yards             34.1%   0.1%
+Brickbottom               27.4%   0.0%
+Davis Square              34.7%   0.0%
+Duck Village              29.0%   0.0%
+East Somerville           31.1%   0.0%
+Hillside                  30.0%   1.0%
+Inner Belt                32.8%   0.0%
+Magoun Square             39.1%   0.0%
+North Point               25.5%   0.0%
+Porter Square             27.0%   0.0%
 Powder House Square       36.2%   0.0%
-Spring Hill               36.1%   0.1%
-Teele Square              29.2%   0.0%
-Ten Hills                 33.3%   0.0%
-Twin City                 28.4%   0.0%
-Union Square              33.6%   0.0%
-Winter Hill               29.9%   0.0%
+Spring Hill               35.6%   0.1%
+Teele Square              31.2%   0.0%
+Ten Hills                 33.2%   0.0%
+Twin City                 26.5%   0.0%
+Union Square              35.1%   0.0%
+Winter Hill               33.0%   0.0%
 ----------------------------------------
-median                    31.2%   0.0%
-worst                     22.8%   1.0%
+median                    32.8%   0.0%
+worst                     25.5%   1.0%
