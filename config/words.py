@@ -97,3 +97,29 @@ PERCEIVED_BORDERS = [
 
 # How a street is named along a perceived border.
 PERCEIVED_LABELS = {"Massachusetts Avenue": "Mass Ave"}
+
+# Hero label variants — the taste input for the layout search
+# (experiments/warp/README.md, algorithm 4). Edit freely.
+#
+# The full name is always a candidate; list only *extra* spellings and
+# break points. Notation:
+#   " "  a line break is allowed here (as today)
+#   "-"  a hyphenated break is allowed here: BRICK-BOTTOM may render as
+#        BRICKBOTTOM on one line, or BRICK- / BOTTOM on two
+# Rule (user, 2026-09-29): SQUARE may always become SQ — applied
+# automatically to the full name and every variant, so don't list SQ forms.
+# Names not listed: full name only (+ SQ where it applies).
+HERO_ABBREVIATIONS = {"SQUARE": "SQ"}
+HERO_VARIANTS = {
+    "Assembly Square":     ["AS-SEM-BLY SQUARE", "ASS-EMBLY SQUARE"],
+    "Boynton Yards":       ["BOYN-TON YARDS"],
+    "Brickbottom":         ["BRICK-BOTTOM"],
+    "Duck Village":        ["DUCK VILL-AGE"],
+    "East Somerville":     ["EAST SOMER-VILLE"],
+    "Hillside":            ["HILL-SIDE"],   # already split across its two legs
+    "Magoun Square":       ["MA-GOUN SQUARE"],
+    "North Point":         ["NORTH PT"],    # engineering-ish, not local — keep?
+    "Powder House Square": ["POWDERHOUSE SQUARE",  # artists' spelling
+                            "POW-DER HOUSE SQUARE"],
+    "Ten Hills":           ["10 HILLS"],
+}
