@@ -34,8 +34,8 @@ from shapely.affinity import affine_transform
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from config.words import (HERO_ABBREVIATIONS, HERO_CURVES, HERO_SPLITS,  # noqa: E402
-                          HERO_SWELL,
+from config.words import (HERO_ABBREVIATIONS, HERO_BENDS, HERO_CURVES,  # noqa: E402
+                          HERO_SPLITS, HERO_SWELL,
                           HERO_VARIANTS)
 from typemap.fills import _polygons  # noqa: E402
 
@@ -666,13 +666,18 @@ def refine(rows, M, ratio):
 
 # --- curved baselines (phase 6) ------------------------------------------------
 
-def centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None):
+def centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None,
+               route="longest"):
     """The shape's spine: the longest path through the medial axis
     (Voronoi edges of boundary samples that lie inside), smoothed with a
     ±`smooth` px moving average, extended straight past both ends by
     `extend` × its length (the raster decides what's inside), evenly
     resampled every `step` px, oriented to read left→right (bottom→top
-    when vertical). Returns [(x, y)] or None. Pass a dict as `debug` to
+    when vertical). route="longest" takes the skeleton's longest path;
+    "roomy" weights each edge by length × (clearance / max)², so the path
+    prefers wide parts over long thin tails (Twin City's widest room is
+    its right lobe, off the longest path). Returns [(x, y)] or None.
+    Pass a dict as `debug` to
     get the construction stages (samples, skeleton, route, smoothed,
     extended) for diagrams."""
     import heapq
@@ -691,12 +696,16 @@ def centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None):
         debug["skeleton"] = [list(e.coords) for e in edges]
     if not edges:
         return None
+    bnd = poly.exterior
+    clear = [bnd.distance(e.interpolate(0.5, normalized=True)) for e in edges]
+    top = max(clear) or 1.0
     adj = {}
-    for e in edges:
-        a, b = (tuple(round(c, 3) for c in e.coords[0]),
-                tuple(round(c, 3) for c in e.coords[-1]))
-        adj.setdefault(a, []).append((b, e.length))
-        adj.setdefault(b, []).append((a, e.length))
+    for e, c in zip(edges, clear):
+        a, b = (tuple(round(v, 3) for v in e.coords[0]),
+                tuple(round(v, 3) for v in e.coords[-1]))
+        w = e.length * ((c / top) ** 2 if route == "roomy" else 1.0)
+        adj.setdefault(a, []).append((b, w))
+        adj.setdefault(b, []).append((a, w))
 
     def far(src):
         dist, prev, pq = {src: 0.0}, {}, [(0.0, src)]
@@ -885,14 +894,70 @@ class SpineFrame:
 
 
 def spines(poly):
-    """Spines at increasing smoothness: straighter spines allow bigger
-    letters (the bend limit scales with cap height)."""
-    out = []
-    for sm in (24, 60, 120):
-        sp = centerline(poly, smooth=sm)
-        if sp is not None:
-            out.append(sp)
+    """Spines along the longest and the roomiest skeleton route, each at
+    light and medium smoothing (±120 px cut corners: Hillside's spine
+    flattened its bend and grazed the notch — user agreed)."""
+    out, seen = [], []
+    for route in ("longest", "roomy"):
+        st = {}
+        if centerline(poly, route=route, debug=st) is None:
+            continue
+        if any(len(st["route"]) == len(r) and st["route"][0] == r[0] for r in seen):
+            continue  # same path (common: the longest route is already roomy)
+        seen.append(st["route"])
+        for sm in (24, 60):
+            sp = centerline(poly, smooth=sm, route=route)
+            if sp is not None:
+                out.append(sp)
     return out
+
+
+def bend_regions(poly, route="longest", min_turn=30.0):
+    """Cut the shape across its raw skeleton route at every sharp bend
+    (turning ≥ min_turn° within ±30 px): the bends are natural word breaks
+    (user: TWIN on the diagonal arm, CITY along the bottom). Returns the
+    pieces in route order, or None if there's no sharp bend."""
+    from shapely.geometry import LineString
+    from shapely.ops import split
+
+    st = {}
+    if centerline(poly, smooth=8, extend=0.0, route=route, debug=st) is None:
+        return None
+    pts = st["smoothed"]
+    n, q = len(pts), max(2, int(30 / 2.0))  # ±15 px missed Hillside's bends
+    turns = []
+    for i in range(q, n - q):
+        a = math.atan2(pts[i][1] - pts[i - q][1], pts[i][0] - pts[i - q][0])
+        b = math.atan2(pts[i + q][1] - pts[i][1], pts[i + q][0] - pts[i][0])
+        turns.append((abs(math.degrees(math.remainder(b - a, math.tau))), i))
+    corners = []
+    for t, i in sorted(turns, reverse=True):
+        if t < min_turn:
+            break
+        if all(abs(i - j) > 4 * q for j in corners):  # one cut per bend
+            corners.append(i)
+    if not corners:
+        return None
+    reach = math.dist(*[poly.bounds[:2], poly.bounds[2:]])
+    pieces = [poly]
+    for i in corners:
+        (x0, y0), (x1, y1) = pts[i - q], pts[i + q]
+        d = math.hypot(x1 - x0, y1 - y0) or 1.0
+        nx, ny = -(y1 - y0) / d, (x1 - x0) / d  # across the route
+        cx, cy = pts[i]
+        cut = LineString([(cx - nx * reach, cy - ny * reach),
+                          (cx + nx * reach, cy + ny * reach)])
+        nxt = []
+        for pc in pieces:
+            nxt += [g for g in split(pc, cut).geoms if g.geom_type == "Polygon"]
+        pieces = nxt
+    line = LineString(pts)
+    keep = [pc for pc in pieces if pc.area > 0.05 * poly.area
+            and pc.intersects(line)]
+    if len(keep) < 2:
+        return None
+    keep.sort(key=lambda pc: line.project(pc.intersection(line).centroid))
+    return keep
 
 
 def _elongation(poly):
@@ -1033,7 +1098,7 @@ def _span(rows, shape):
     return min(1.0, (max(ts) - min(ts)) / L)
 
 
-def _splits(regs, cands, M):
+def _splits(regs, cands, M, consecutive=False):
     """One word per lobe (HILL / SIDE in Hillside's legs). Each lobe takes
     its own best angle — at a shared angle the small lobe starves (Hillside:
     33k vs 7.6k px², ~45px) — letters stay upright via axis(), and the
@@ -1053,7 +1118,11 @@ def _splits(regs, cands, M):
         return fits[k, word]
 
     out = []
-    pairs = [(a, b) for a in range(len(regs)) for b in range(len(regs)) if a != b]
+    # adjacent pieces, either way round: pieces come in route order and a
+    # route may run right→left; the reading-order check below decides
+    pairs = ([pr for a in range(len(regs) - 1) for pr in ((a, a + 1), (a + 1, a))]
+             if consecutive else
+             [(a, b) for a in range(len(regs)) for b in range(len(regs)) if a != b])
     for lines, pen in cands:
         if len(lines) != 2:
             continue
@@ -1065,11 +1134,11 @@ def _splits(regs, cands, M):
             if None in got:
                 continue
             (r1, th1), (r2, th2) = got
-            u, p = axis(th1)
+            # the second word reads after the first on the *page* — to its
+            # right or below (measuring along the first word's own axis
+            # rejected TWIN on Twin City's diagonal arm, CITY to its right)
             c1, c2 = regs[order[0]].centroid, regs[order[1]].centroid
-            dv = (c2.x - c1.x) * p[0] + (c2.y - c1.y) * p[1]
-            dt = (c2.x - c1.x) * u[0] + (c2.y - c1.y) * u[1]
-            if 2 * dv + dt <= 0:  # second word must read after the first
+            if (c2.x - c1.x) + (c2.y - c1.y) <= 0:
                 continue
             parts = [dict(r1[0]), dict(r2[0])]
             lo_ = min(r["size"] for r in parts)
@@ -1110,6 +1179,19 @@ def search(polygon, name, M):
     if regs:
         scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
                    for x in _splits(regs, cands, M)]
+    # word breaks at sharp bends of the raw skeleton route (Twin City)
+    if name in HERO_BENDS or _elongation(inner) >= CURVE_ELONGATION:
+        bends = []
+        for route in ("longest", "roomy"):
+            got = bend_regions(inner, route=route)
+            if got and not any(len(got) == len(b) and got[0].equals(b[0])
+                               for b in bends):
+                bends.append(got)
+        if name in HERO_BENDS:
+            scored = []
+        for regs_b in bends:
+            scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
+                       for x in _splits(regs_b, cands, M, consecutive=True)]
     # swell: single lines with per-letter sizes, on the main straight axes
     # and (for long shapes) the spines
     swell_forced = name in HERO_SWELL
@@ -1153,6 +1235,8 @@ def search(polygon, name, M):
                                            MAX_RATIO))
     if swell_forced:  # swell only (config HERO_SWELL)
         scored = [x for x in scored if "sizes" in x[1][0]]
+    if name in HERO_BENDS:  # bend splits only (config HERO_BENDS)
+        scored = [x for x in scored if x[5] == SPLIT_RATIO]
     if not scored:
         return None
     scored.sort(key=lambda x: -x[0])

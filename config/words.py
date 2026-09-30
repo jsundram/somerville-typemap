@@ -140,3 +140,8 @@ HERO_CURVES = set()
 # size, from the room where it sits; neighbors ≤ 12% apart, word ≤ 1.5×).
 # Swell already competes on score for long, thin shapes; this forces it.
 HERO_SWELL = set()
+
+# Labels broken into words at the sharp bends of the shape's skeleton route
+# (TWIN on Twin City's diagonal arm, CITY along its bottom — user). Bend
+# breaks already compete on score for long shapes; this forces them.
+HERO_BENDS = set()

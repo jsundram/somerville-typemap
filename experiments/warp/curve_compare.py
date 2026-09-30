@@ -15,6 +15,7 @@ HERO_CURVES), the chosen spine in red. Row 2: forced swell — per-letter
 sizes (config HERO_SWELL), on a spine or a straight axis. Row 3: the
 same search with curves and swell off. Each cell notes the label and its
 line sizes (swell: smallest–largest letter).
+Row 4: forced word breaks at sharp bends of the skeleton route (HERO_BENDS).
 """
 
 import json
@@ -75,7 +76,14 @@ def construction(doc, poly, name, col, row):
     for e in stages["skeleton"]:
         doc.raw(_path(e, 'stroke="#d9a441" stroke-width="1.2"'))
     doc.raw(_path(stages["route"], 'stroke="#2f6aa8" stroke-width="3"'))
-    for sm, color in ((24, "#f4a09a"), (60, "#e5534b"), (120, "#a61b12")):
+    roomy = {}
+    hl.centerline(inner, debug=roomy, route="roomy")
+    doc.raw(_path(roomy["route"], 'stroke="#8e44ad" stroke-width="3" '
+                                   'stroke-dasharray="2 3"'))
+    for reg in hl.bend_regions(inner) or []:  # bend cuts (word breaks)
+        doc.raw(_path(list(reg.exterior.coords), 'stroke="#2f6aa8" '
+                      'stroke-width="1" stroke-dasharray="3 3"'))
+    for sm, color in ((24, "#f4a09a"), (60, "#e5534b")):
         st = {}
         hl.centerline(inner, smooth=sm, debug=st)
         doc.raw(_path(st["smoothed"], f'stroke="{color}" stroke-width="2"'))
@@ -96,12 +104,13 @@ def construction(doc, poly, name, col, row):
         items = [("#c9c9c9", "Voronoi cells of 240 boundary samples"),
                  ("#d9a441", "skeleton: Voronoi edges inside the shape"),
                  ("#2f6aa8", "longest route through the skeleton"),
+                 ("#8e44ad", "roomiest route (length × clearance²)"),
                  ("#f4a09a", "smoothed ±24 px"), ("#e5534b", "smoothed ±60 px"),
-                 ("#a61b12", "smoothed ±120 px"),
                  ("#2f8f4e", "extensions (30% of length, straight)")]
         for i, (color, label) in enumerate(items):
             y = row * CELL + 300 + i * 24
-            dash = ' stroke-dasharray="6 4"' if "extensions" in label else ""
+            dash = (' stroke-dasharray="6 4"' if "extensions" in label else
+                    ' stroke-dasharray="2 3"' if "roomiest" in label else "")
             doc.raw(f'<line x1="{col * CELL + 30}" y1="{y}" x2="{col * CELL + 70}" '
                     f'y2="{y}" stroke="{color}" stroke-width="3"{dash}/>')
             doc.raw(f'<text x="{col * CELL + 80}" y="{y + 5}" font-size="14" '
@@ -111,17 +120,20 @@ def construction(doc, poly, name, col, row):
 def main():
     feats = {f["name"]: f for f in json.loads((HERE / "shapes.json").read_text())["features"]}
     M = hl.Metrics.load(RS.FONT_PATH)
-    modes = ("construction", "curved", "swell", "straight")
+    modes = ("construction", "curved", "swell", "bends", "straight")
     doc = SvgDoc(len(NAMES) * CELL, len(modes) * CELL, background="#ffffff")
     saved = set(hl.HERO_CURVES), set(hl.HERO_SWELL), hl.CURVE_ELONGATION
     for row, mode in enumerate(modes):
         hl.HERO_CURVES.clear()
         hl.HERO_SWELL.clear()
+        hl.HERO_BENDS.clear()
         hl.CURVE_ELONGATION = saved[2]
         if mode == "curved":
             hl.HERO_CURVES.update(NAMES)
         elif mode == "swell":
             hl.HERO_SWELL.update(NAMES)
+        elif mode == "bends":
+            hl.HERO_BENDS.update(NAMES)
         else:
             hl.CURVE_ELONGATION = float("inf")  # curves + swell off
         for col, name in enumerate(NAMES):
@@ -151,6 +163,7 @@ def main():
                     for r in res["rows"]))
             doc.raw(f'<text x="{col * CELL + 8}" y="{row * CELL + 16}" font-size="12" '
                     f'font-family="monospace" fill="#999">{name} — {mode}: {note}</text>')
+    hl.HERO_BENDS.clear()
     hl.HERO_CURVES.clear()
     hl.HERO_CURVES.update(saved[0])
     hl.HERO_SWELL.clear()
