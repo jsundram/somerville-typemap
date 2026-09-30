@@ -345,6 +345,20 @@ class Frame:
         return Polygon([self.xy(t0, v0), self.xy(t1, v0),
                         self.xy(t1, v1), self.xy(t0, v1)])
 
+    def place(self, r, M):
+        """[(ch, glyph, affine)] for the row's glyphs: font units → page."""
+        (ux, uy), (px, py) = self.u, self.p
+        k = r["size"] / M.upm
+        out, pen = [], r["t0"]
+        for ch in r["line"]:
+            g = M.cmap.get(ord(ch))
+            if g is None:
+                continue
+            ox, oy = self.xy(pen, r["v1"])  # baseline = bottom of cap band
+            out.append((ch, g, [ux * k, -px * k, uy * k, -py * k, ox, oy]))
+            pen += M.gs[g].width * k
+        return out
+
 
 # --- layout ------------------------------------------------------------------
 
@@ -398,9 +412,10 @@ def fit_lines(frame, lines, M):
         return starts
 
     n = len(lines)
-    if pack_sized([MIN_SIZE] * n) is None:
+    smax = min(MAX_SIZE, getattr(frame, "max_cap", math.inf) / M.cap)
+    if smax < MIN_SIZE or pack_sized([MIN_SIZE] * n) is None:
         return []
-    lo, hi = MIN_SIZE, MAX_SIZE
+    lo, hi = MIN_SIZE, smax
     for _ in range(14):
         mid = (lo + hi) / 2
         if pack_sized([mid] * n) is not None:
@@ -428,7 +443,8 @@ def _grow(frame, lines, adv, sizes, common, need, gap, maxgap, rows_ok,
     starts = pack_sized(sizes)
     if starts is None:
         return None
-    cap = min(MAX_SIZE, MAX_RATIO * min(sizes), MAX_RATIO * common)
+    cap = min(MAX_SIZE, MAX_RATIO * min(sizes), MAX_RATIO * common,
+              getattr(frame, "max_cap", math.inf) / M.cap)
 
     def latest_bound(i, s_list):
         """Last start row for line i so lines i+1.. still fit below."""
@@ -533,11 +549,23 @@ def _shift_row(r, dt, dv):
 def outline(r, M):
     """The row's real glyph outlines on the page."""
     fr = r["frame"]
+    if isinstance(fr, SpineFrame):
+        return unary_union([affine_transform(M.line_poly(ch), m)
+                            for ch, _, m in fr.place(r, M) if ch != " "])
     (ux, uy), (px, py) = fr.u, fr.p
     k = r["size"] / M.upm
     ox, oy = fr.xy(r["t0"], r["v1"])  # pen start on the baseline
     return affine_transform(M.line_poly(r["line"]),
                             [ux * k, -px * k, uy * k, -py * k, ox, oy])
+
+
+def _letters_apart(r, M):
+    """On a bend, neighboring letters of one word must not touch (BR in
+    BRICKBOTTOM did at a tight spot of the spine)."""
+    polys = [affine_transform(M.line_poly(ch), m)
+             for ch, _, m in r["frame"].place(r, M) if ch != " "]
+    gap = 0.02 * r["size"]
+    return all(a.distance(b) >= gap for a, b in zip(polys, polys[1:]))
 
 
 def refine(rows, M, ratio):
@@ -569,6 +597,8 @@ def refine(rows, M, ratio):
 
     def ok(i, r):
         if not bands_apart(i, r):
+            return False, None
+        if isinstance(r["frame"], SpineFrame) and not _letters_apart(r, M):
             return False, None
         shp = outline(r, M)
         return (shp.within(r["frame"].poly) and clear(i, shp)), shp
@@ -603,7 +633,8 @@ def refine(rows, M, ratio):
         grew = False
         for i in range(len(rows)):
             others = [r["size"] for j, r in enumerate(rows) if j != i]
-            limit = min([MAX_SIZE] + [ratio * s for s in others])
+            limit = min([MAX_SIZE, getattr(rows[i]["frame"], "max_cap", math.inf)
+                         / M.cap] + [ratio * s for s in others])
             if rows[i]["size"] * 1.03 > limit:
                 continue
             if attempt(i, 1.03):
@@ -618,19 +649,21 @@ def refine(rows, M, ratio):
 
 # --- curved baselines (phase 6) ------------------------------------------------
 
-def centerline(poly, step=2.0):
+def centerline(poly, step=2.0, smooth=24.0, extend=0.3):
     """The shape's spine: the longest path through the medial axis
-    (Voronoi edges of boundary samples that lie inside), smoothed and
+    (Voronoi edges of boundary samples that lie inside), smoothed with a
+    ±`smooth` px moving average, extended straight past both ends by
+    `extend` × its length (the raster decides what's inside), evenly
     resampled every `step` px, oriented to read left→right (bottom→top
     when vertical). Returns [(x, y)] or None."""
     import heapq
 
     from shapely.geometry import LineString, MultiPoint
+    from shapely.ops import voronoi_diagram
 
     ring = poly.exterior
     n = 240
     pts = MultiPoint([ring.interpolate(i / n, normalized=True) for i in range(n)])
-    from shapely.ops import voronoi_diagram
     vor = voronoi_diagram(pts, edges=True)  # a collection of multilines
     edges = [e for g in vor.geoms for e in getattr(g, "geoms", [g])
              if e.within(poly)]
@@ -640,9 +673,8 @@ def centerline(poly, step=2.0):
     for e in edges:
         a, b = (tuple(round(c, 3) for c in e.coords[0]),
                 tuple(round(c, 3) for c in e.coords[-1]))
-        w = e.length
-        adj.setdefault(a, []).append((b, w))
-        adj.setdefault(b, []).append((a, w))
+        adj.setdefault(a, []).append((b, e.length))
+        adj.setdefault(b, []).append((a, e.length))
 
     def far(src):
         dist, prev, pq = {src: 0.0}, {}, [(0.0, src)]
@@ -654,152 +686,185 @@ def centerline(poly, step=2.0):
                 if d + w < dist.get(v, math.inf):
                     dist[v], prev[v] = d + w, u
                     heapq.heappush(pq, (d + w, v))
-        end = max(dist, key=dist.get)
-        return end, prev
+        return max(dist, key=dist.get), prev
 
-    # tree diameter (two sweeps) on the largest component
-    start = max(adj, key=lambda k: len(adj[k]))
-    a, _ = far(start)
+    a, _ = far(max(adj, key=lambda k: len(adj[k])))  # tree diameter
     b, prev = far(a)
     path = [b]
     while path[-1] in prev:
         path.append(prev[path[-1]])
     if len(path) < 3:
         return None
-    line = LineString(path).simplify(step * 2)
-    cs = list(line.coords)
-    for _ in range(3):  # Chaikin smoothing, endpoints kept
-        cs = ([cs[0]] + [q for p0, p1 in zip(cs, cs[1:])
-                         for q in ((0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]),
-                                   (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]))]
-              + [cs[-1]])
-    line = LineString(cs)
-    dx, dy = cs[-1][0] - cs[0][0], cs[-1][1] - cs[0][1]
-    if dx < -1e-6 or (abs(dx) <= 1e-6 and dy > 0):
-        line = LineString(cs[::-1])
-    k = max(2, int(line.length / step))
-    pts = [line.interpolate(i / k, normalized=True).coords[0] for i in range(k + 1)]
-    # moving-average smoothing (~48 px window, 3 passes; ends pinned): the
-    # medial axis wiggles with every notch in the boundary, and letters
-    # riding those wiggles pinch together (run 1: HI LL, TW N)
-    q = max(2, int(24 / step))
+
+    def resample(cs):
+        ln = LineString(cs)
+        k = max(2, int(ln.length / step))
+        return [ln.interpolate(i / k, normalized=True).coords[0] for i in range(k + 1)]
+
+    pts = resample(path)
+    # moving average, 3 passes, ends pinned: the medial axis wiggles with
+    # every boundary notch; letters riding the wiggles pinch together
+    q = max(2, int(smooth / step))
     for _ in range(3):
         pts = [pts[0]] + [
-            (sum(x for x, _ in pts[max(0, i - q):i + q + 1]) / len(pts[max(0, i - q):i + q + 1]),
-             sum(y for _, y in pts[max(0, i - q):i + q + 1]) / len(pts[max(0, i - q):i + q + 1]))
+            tuple(sum(c[d] for c in pts[max(0, i - q):i + q + 1])
+                  / len(pts[max(0, i - q):i + q + 1]) for d in (0, 1))
             for i in range(1, len(pts) - 1)] + [pts[-1]]
-    # resample evenly again: callers index the spine by distance / step
-    line = LineString(pts)
-    k = max(2, int(line.length / step))
-    return [line.interpolate(i / k, normalized=True).coords[0] for i in range(k + 1)]
+    pts = resample(pts)
+    L = step * (len(pts) - 1)
+    m = max(2, int(0.1 * len(pts)))  # end tangents over the last 10%
+    (x0, y0), (x1, y1) = pts[0], pts[m]
+    (x2, y2), (x3, y3) = pts[-1 - m], pts[-1]
+    d0, d1 = math.dist(pts[0], pts[m]), math.dist(pts[-1 - m], pts[-1])
+    e = extend * L
+    pts = ([(x0 - (x1 - x0) / d0 * e, y0 - (y1 - y0) / d0 * e)] + pts
+           + [(x3 + (x3 - x2) / d1 * e, y3 + (y3 - y2) / d1 * e)])
+    pts = resample(pts)
+    dx, dy = pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]
+    if dx < -1e-6 or (abs(dx) <= 1e-6 and dy > 0):
+        pts = pts[::-1]
+    return pts
 
 
-def fit_curve(poly, line, M):
-    """Set `line` along the shape's spine: the largest size where some
-    stretch of the spine has clearance ≥ half the cap height (plus a
-    little for curvature) all along the word. Returns a row or None."""
-    spine = centerline(poly)
-    if spine is None:
-        return None
-    step = math.dist(spine[0], spine[1])
-    bnd = poly.exterior
-    clear = [bnd.distance(shapely.Point(p)) for p in spine]
-    n = len(spine)
-    ang = [math.atan2(spine[min(n - 1, i + 1)][1] - spine[max(0, i - 1)][1],
-                      spine[min(n - 1, i + 1)][0] - spine[max(0, i - 1)][0])
-           for i in range(n)]
-    # curvature: turning across ±10 px, per px
-    q = max(1, int(10 / step))
-    kappa = [abs(math.remainder(ang[min(n - 1, i + q)] - ang[max(0, i - q)],
-                                math.tau)) / (2 * q * step) for i in range(n)]
-    adv = M.advance(line)
+class SpineFrame:
+    """A polygon seen along a curved spine: t = distance along the spine,
+    v = offset across it (screen-down side positive, like Frame.p). Same
+    raster interface as Frame, so the whole straight-line search — stacked
+    lines, placement, size trades, outline refinement — runs on curves.
 
-    def window(sz):
-        """Start index of the best window fitting size sz, or None."""
-        nwin = max(1, int(sz * adv / step))
-        half = sz * M.cap / 2
-        # letters pinch on the inside of a bend by ~cap/radius: keep the
-        # radius ≥ 3 cap heights under the whole word (≤ ~15% squeeze),
-        # and the word's total turn modest
-        kmax = 1 / (3 * sz * M.cap)
-        best = None
-        for i in range(0, n - nwin):
-            lo = min(clear[i:i + nwin + 1])
-            if lo < half * 1.08 or max(kappa[i:i + nwin + 1]) > kmax:
+    Offsets are kept below the spine's tightest radius (no fold-over) and
+    letter cap height below RADIUS_CAPS× less than it, so letters on the
+    inside of a bend don't collide."""
+
+    # letters are spaced along their mid-height line, so on a bend of
+    # radius R their tops pinch by ~(cap/2)/R: R ≥ 4 caps keeps it ≤ 12%
+    # (2.5 caps with baseline spacing let BRICK's letters collide)
+    RADIUS_CAPS = 4.0
+
+    def __init__(self, polygon, spine, reverse=False):
+        import numpy as np
+
+        if reverse:
+            spine = spine[::-1]
+
+        self.poly, self.np = polygon, np
+        shapely.prepare(polygon)
+        P = np.asarray(spine, dtype=float)
+        seg = np.hypot(*np.diff(P, axis=0).T)
+        self.s = np.concatenate([[0.0], np.cumsum(seg)])
+        T = np.gradient(P, self.s, axis=0)
+        T /= np.hypot(T[:, 0], T[:, 1])[:, None]
+        self.P, self.T = P, T
+        self.N = np.stack([-T[:, 1], T[:, 0]], axis=1)  # screen-down side
+        ang = np.unwrap(np.arctan2(T[:, 1], T[:, 0]))
+        q = max(1, int(10 / max(seg.mean(), 1e-6)))
+        kappa = np.zeros(len(P))
+        kappa[q:-q] = (np.abs(ang[2 * q:] - ang[:-2 * q])
+                       / (self.s[2 * q:] - self.s[:-2 * q]))
+        radius = 1 / np.maximum(kappa, 1e-6)
+        clear = max(polygon.exterior.distance(shapely.Point(p)) for p in spine[::5])
+        # offsets stay inside the tightest bend *near the shape* (no fold)
+        inside_pts = [i for i, p in enumerate(spine) if polygon.contains(shapely.Point(p))]
+        rmin = radius[inside_pts].min() if inside_pts else radius.min()
+        vmax = min(0.9 * rmin, 1.6 * clear)
+        L = self.s[-1]
+        self.res = max(L, 2 * vmax) / GRID
+        self.tmin, self.vmin = 0.0, -vmax
+        nt = int(L / self.res) + 1
+        nv = int(2 * vmax / self.res) + 1
+        tt = (np.arange(nt) + 0.5) * self.res
+        vv = -vmax + (np.arange(nv) + 0.5) * self.res
+        px, py = np.interp(tt, self.s, P[:, 0]), np.interp(tt, self.s, P[:, 1])
+        nx, ny = np.interp(tt, self.s, self.N[:, 0]), np.interp(tt, self.s, self.N[:, 1])
+        X = px[None, :] + nx[None, :] * vv[:, None]
+        Y = py[None, :] + ny[None, :] * vv[:, None]
+        inside = shapely.contains_xy(polygon, X, Y)
+        free = np.zeros(inside.shape, dtype=np.int32)
+        free[-1] = inside[-1]
+        for r in range(nv - 2, -1, -1):
+            free[r] = (free[r + 1] + 1) * inside[r]
+        self.free = free
+        self._cache = {}
+        self.angle = math.atan2(P[-1, 1] - P[0, 1], P[-1, 0] - P[0, 0])
+        # local bend limit per column: a band of hr rows (≈ cap height)
+        # needs radius ≥ RADIUS_CAPS × its height *where it sits* (a global
+        # limit pinned every label to the spine's tightest wiggle)
+        self.radius_col = np.interp(tt, self.s, radius)
+
+    def widest(self, hr):
+        """Frame.widest, with columns too tightly bent for hr excluded."""
+        if hr not in self._cache:
+            np = self.np
+            ok_col = self.radius_col >= self.RADIUS_CAPS * hr * self.res
+            m = (self.free >= hr) & ok_col[None, :]
+            c = np.cumsum(m, axis=1)
+            base = np.maximum.accumulate(np.where(~m, c, 0), axis=1)
+            run = c - base
+            self._cache[hr] = (run.max(axis=1), run.argmax(axis=1))
+        return self._cache[hr]
+
+    def xy(self, t, v):
+        np = self.np
+        x = np.interp(t, self.s, self.P[:, 0]) + np.interp(t, self.s, self.N[:, 0]) * v
+        y = np.interp(t, self.s, self.P[:, 1]) + np.interp(t, self.s, self.N[:, 1]) * v
+        return float(x), float(y)
+
+    def box(self, t0, t1, v0, v1, n=12):
+        top = [self.xy(t0 + (t1 - t0) * i / n, v0) for i in range(n + 1)]
+        bot = [self.xy(t1 - (t1 - t0) * i / n, v1) for i in range(n + 1)]
+        return Polygon(top + bot)
+
+    def place(self, r, M):
+        """Glyphs along the band's baseline (v1), each rotated to the local
+        direction across its own width; spacing is measured along the
+        baseline itself, so bends neither stretch nor squash the word."""
+        k = r["size"] / M.upm
+        vm = (r["v0"] + r["v1"]) / 2  # letters are spaced along mid-height
+        half = (r["v1"] - r["v0"]) / 2
+        out, t = [], r["t0"]
+        for ch in r["line"]:
+            g = M.cmap.get(ord(ch))
+            if g is None:
                 continue
-            if abs(math.remainder(ang[i + nwin] - ang[i], math.tau)) > math.radians(35):
-                continue
-            if best is None or lo > best[1]:
-                best = (i, lo)
-        return best[0] if best else None
+            w = M.gs[g].width * k
+            a = self.xy(t, vm)
+            dt = w  # advance t until the mid-line has covered w
+            for _ in range(3):
+                b = self.xy(t + dt, vm)
+                dt *= w / max(math.dist(a, b), 1e-6)
+            b = self.xy(t + dt, vm)
+            d = max(math.dist(a, b), 1e-6)
+            ux, uy = (b[0] - a[0]) / d, (b[1] - a[1]) / d
+            px, py = -uy, ux
+            # glyph origin: the mid-line point dropped half a cap to the
+            # baseline, across this glyph's own direction
+            ox, oy = a[0] + px * half, a[1] + py * half
+            out.append((ch, g, [ux * k, -px * k, uy * k, -py * k, ox, oy]))
+            t += dt
+        return out
 
-    lo_s, hi_s = MIN_SIZE, MAX_SIZE
-    if window(lo_s) is None:
-        return None
-    for _ in range(14):
-        mid = (lo_s + hi_s) / 2
-        if window(mid) is not None:
-            lo_s = mid
-        else:
-            hi_s = mid
-    for _ in range(20):  # exact outline check, shrinking if needed
-        row = _curve_row(spine, step, ang, line, lo_s, window(lo_s), M)
-        if row and row["curve"]["shape"].within(poly):
-            return row
-        lo_s *= 0.97
-        if window(lo_s) is None:
-            return None
-    return None
+    def reads_forward(self, rows):
+        """Every row reads left→right (bottom→top when vertical) *where it
+        sits* — a spine's overall direction can disagree locally (Hillside
+        came out upside down)."""
+        for r in rows:
+            vm = (r["v0"] + r["v1"]) / 2
+            (x0, y0), (x1, y1) = self.xy(r["t0"], vm), self.xy(r["t1"], vm)
+            dx, dy = x1 - x0, y1 - y0
+            if dx < -0.15 * math.hypot(dx, dy) or (abs(dx) <= 0.15 * math.hypot(dx, dy) and dy > 0):
+                return False
+        return True
 
 
-def _curve_row(spine, step, ang, line, sz, i0, M):
-    """Glyphs placed along the spine from sample i0, each rotated to the
-    tangent at its center, the spine running through mid cap height."""
-    if i0 is None:
-        return None
-    k = sz / M.upm
-    half = sz * M.cap / 2
-    pos = i0 * step
-    glyphs, parts, corners = [], [], []
-    for ch in line:
-        g = M.cmap.get(ord(ch))
-        if g is None:
-            continue
-        w = M.gs[g].width * k
-        c = pos + w / 2
-
-        def at(d):
-            j = max(0, min(len(spine) - 2, int(d / step)))
-            f = d / step - j
-            return (spine[j][0] + (spine[j + 1][0] - spine[j][0]) * f,
-                    spine[j][1] + (spine[j + 1][1] - spine[j][1]) * f)
-
-        x, y = at(c)
-        # the glyph's angle is the chord across its own width, not one
-        # noisy sample's tangent
-        (ax_, ay_), (bx_, by_) = at(pos), at(pos + max(w, 1e-3))
-        th = math.atan2(by_ - ay_, bx_ - ax_)
-        ux, uy = math.cos(th), math.sin(th)
-        px, py = -uy, ux  # screen-down relative to the text
-        ox, oy = x - ux * w / 2 + px * half, y - uy * w / 2 + py * half
-        m = [ux * k, -px * k, uy * k, -py * k, ox, oy]
-        glyphs.append((ch, g, m))
-        if ch != " ":
-            parts.append(affine_transform(M.line_poly(ch), m))
-        for tt in (0, w):
-            for vv in (-half, half):
-                corners.append((x + ux * (tt - w / 2) + px * vv,
-                                y + uy * (tt - w / 2) + py * vv))
-        pos += w
-        if pos > len(spine) * step:
-            return None
-    width = sz * M.advance(line)
-    return {"line": line, "size": sz, "t0": 0.0, "t1": width, "v0": 0.0,
-            "v1": sz * M.cap, "frame": None,
-            "curve": {"glyphs": glyphs, "shape": unary_union(parts),
-                      "corners": corners,
-                      "angle": math.atan2(corners[-1][1] - corners[0][1],
-                                          corners[-1][0] - corners[0][0])}}
+def spines(poly):
+    """Spines at increasing smoothness: straighter spines allow bigger
+    letters (the bend limit scales with cap height)."""
+    out = []
+    for sm in (24, 60, 120):
+        sp = centerline(poly, smooth=sm)
+        if sp is not None:
+            out.append(sp)
+    return out
 
 
 def _elongation(poly):
@@ -833,9 +898,6 @@ def _span(rows, shape):
     ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
     ts = []
     for r in rows:
-        if "curve" in r:
-            ts += [x * ux + y * uy for x, y in r["curve"]["corners"]]
-            continue
         fr = r["frame"]
         for t in (r["t0"], r["t1"]):
             for v in (r["v0"], r["v1"]):
@@ -864,13 +926,14 @@ def _splits(regs, cands, M):
         return fits[k, word]
 
     out = []
+    pairs = [(a, b) for a in range(len(regs)) for b in range(len(regs)) if a != b]
     for lines, pen in cands:
         if len(lines) != 2:
             continue
         hyph = lines[0].endswith("-")
         words = [lines[0].rstrip("-"), lines[1]]
         pen = pen - (PENALTY["hyphen"] if hyph else 0) + PENALTY["split"]
-        for order in ((0, 1), (1, 0)):
+        for order in pairs:
             got = [best(k, w) for k, w in zip(order, words)]
             if None in got:
                 continue
@@ -902,7 +965,13 @@ def search(polygon, name, M):
     if inner.geom_type == "MultiPolygon":
         inner = max(inner.geoms, key=lambda g: g.area)
     cands = candidates(name)
-    regs = lobe_regions(inner, 2) if name in HERO_SPLITS else None
+    # lobes: try 2- and 3-way decompositions (North Point: NORTH in the
+    # middle lobe, POINT in the last — user)
+    regs = None
+    if name in HERO_SPLITS:
+        regs = []
+        for n_ in (2, 3):
+            regs += lobe_regions(inner, n_) or []
     scored = []  # (score, rows, lines, pen, th, ratio)
     for th in angles(inner):
         u, p = axis(th)
@@ -917,23 +986,24 @@ def search(polygon, name, M):
     forced = name in HERO_CURVES
     if forced or _elongation(inner) >= CURVE_ELONGATION:
         if forced:
-            scored = []  # curve only (config HERO_CURVES)
-        for lines, pen in cands:
-            if len(lines) != 1:
-                continue
-            row = fit_curve(inner, lines[0], M)
-            if row is not None:
-                pen_c = pen + PENALTY["curve"]
-                th = row["curve"]["angle"]
-                scored.append((_score([row], pen_c, th, M, inner), [row], lines,
-                               pen_c, th, MAX_RATIO))
+            scored = []  # curves only (config HERO_CURVES)
+        for sp in spines(inner):
+            for rev in (False, True):  # readability is judged locally
+                frame = SpineFrame(inner, sp, reverse=rev)
+                for lines, pen in cands:
+                    pen_c = pen + PENALTY["curve"]
+                    for rows in fit_lines(frame, lines, M):
+                        if frame.reads_forward(rows):
+                            scored.append((_score(rows, pen_c, frame.angle, M,
+                                                  inner),
+                                           rows, lines, pen_c, frame.angle,
+                                           MAX_RATIO))
     if not scored:
         return None
     scored.sort(key=lambda x: -x[0])
     best = None
     for _, rows, lines, pen, th, ratio in scored[:REFINE_TOP]:
-        if not any("curve" in r for r in rows):  # curves are exact already
-            rows = refine(rows, M, ratio)
+        rows = refine(rows, M, ratio)
         if rows is None:
             continue
         sc = _score(rows, pen, th, M, inner)
@@ -946,35 +1016,15 @@ def search(polygon, name, M):
 
 
 def render(doc, result, M, fill):
-    """Emit glyph outlines, undistorted, along each row's baseline."""
+    """Emit glyph outlines, undistorted, each where its frame places it."""
     from fontTools.pens.svgPathPen import SVGPathPen
 
     for r in result["rows"]:
-        if "curve" in r:
-            for ch, g, m in r["curve"]["glyphs"]:
-                if ch == " ":
-                    continue
-                sp = SVGPathPen(M.gs, ntos=lambda v: f"{v:.1f}")
-                M.gs[g].draw(sp)
-                a, b, c, d, e, f = m[0], m[2], m[1], m[3], m[4], m[5]
-                doc.raw(f'<path transform="matrix({a:.5f} {b:.5f} {c:.5f} '
-                        f'{d:.5f} {e:.2f} {f:.2f})" d="{sp.getCommands()}" '
-                        f'fill="{fill}"/>')
-            continue
-        fr = r["frame"]
-        (ux, uy), (px, py) = fr.u, fr.p
-        k = r["size"] / M.upm
-        pen_t = r["t0"]
-        for ch in r["line"]:
-            g = M.cmap.get(ord(ch))
-            if g is None:
+        for ch, g, m in r["frame"].place(r, M):
+            if ch == " ":
                 continue
-            bx, by = fr.xy(pen_t, r["v1"])  # baseline = bottom of cap band
-            if ch != " ":
-                sp = SVGPathPen(M.gs, ntos=lambda v: f"{v:.1f}")
-                M.gs[g].draw(sp)
-                # font units (x right, y up) → page: x along u, y along −p
-                doc.raw(f'<path transform="matrix({ux * k:.5f} {uy * k:.5f} '
-                        f'{-px * k:.5f} {-py * k:.5f} {bx:.2f} {by:.2f})" '
-                        f'd="{sp.getCommands()}" fill="{fill}"/>')
-            pen_t += M.gs[g].width * k
+            sp = SVGPathPen(M.gs, ntos=lambda v: f"{v:.1f}")
+            M.gs[g].draw(sp)
+            a, b, d, e, x, y = m  # shapely order → SVG matrix(a d b e x y)
+            doc.raw(f'<path transform="matrix({a:.5f} {d:.5f} {b:.5f} {e:.5f} '
+                    f'{x:.2f} {y:.2f})" d="{sp.getCommands()}" fill="{fill}"/>')

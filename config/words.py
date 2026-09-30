@@ -119,7 +119,6 @@ HERO_VARIANTS = {
     "East Somerville":     ["EAST SOMER-VILLE"],
     "Hillside":            ["HILL-SIDE"],   # already split across its two legs
     "Magoun Square":       ["MA-GOUN SQUARE"],
-    "North Point":         ["NORTH PT"],    # engineering-ish, not local — keep?
     "Powder House Square": ["POWDERHOUSE SQUARE",  # artists' spelling
                             "POW-DER HOUSE SQUARE"],
     "Ten Hills":           ["10 HILLS"],
@@ -128,7 +127,8 @@ HERO_VARIANTS = {
 # Labels that may put one word in each lobe of a bent shape (HILL / SIDE in
 # Hillside's two legs). Opt-in: on other shapes a split scatters the words
 # (North Point read NORTH … PT at opposite tips).
-HERO_SPLITS = {"Hillside", "Porter Square"}
+HERO_SPLITS = {"Hillside", "Porter Square",
+               "North Point"}  # NORTH in the middle lobe, POINT in the last (user)
 
 # Labels set along a curved baseline (the shape's smoothed spine) even when
 # a straight layout would fit bigger — e.g. North Point, whose best straight

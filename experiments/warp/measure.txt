@@ -10,7 +10,7 @@ East Somerville           31.0%   0.0%    70.9  EAST / SOMER- / VILLE
 Hillside                  16.9%   0.0%    55.4  HILLSIDE
 Inner Belt                40.5%   0.0%    97.7  INNER / BELT
 Magoun Square             39.3%   0.0%    86.0  MAGOUN / SQUARE
-North Point               13.5%   0.0%    32.3  NORTH / PT
+North Point               17.9%   0.0%    28.6  NORTH / POINT
 Porter Square             20.4%   0.0%    50.3  PORTER SQ
 Powder House Square       42.9%   0.0%    89.6  POWDER / HOUSE SQ
 Spring Hill               37.4%   0.0%    98.3  SPRING / HILL
@@ -21,4 +21,4 @@ Union Square              37.9%   0.0%    99.6  UNION / SQ
 Winter Hill               38.5%   0.0%    76.9  WINTER / HILL
 ----------------------------------------
 median                    31.9%   0.0%    76.9
-worst                     13.5%   0.0%    32.3
+worst                     16.9%   0.0%    28.6
