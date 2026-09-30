@@ -124,3 +124,8 @@ HERO_VARIANTS = {
                             "POW-DER HOUSE SQUARE"],
     "Ten Hills":           ["10 HILLS"],
 }
+
+# Labels that may put one word in each lobe of a bent shape (HILL / SIDE in
+# Hillside's two legs). Opt-in: on other shapes a split scatters the words
+# (North Point read NORTH … PT at opposite tips).
+HERO_SPLITS = {"Hillside", "Porter Square"}

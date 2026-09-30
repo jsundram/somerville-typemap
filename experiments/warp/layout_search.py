@@ -36,7 +36,8 @@ from shapely.ops import unary_union
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
 
-from config.words import HERO_ABBREVIATIONS, HERO_VARIANTS  # noqa: E402
+from config.words import (HERO_ABBREVIATIONS, HERO_SPLITS,  # noqa: E402
+                          HERO_VARIANTS)
 from typemap.fills import _polygons  # noqa: E402
 
 # score penalties (fractions of ink): the full name should win ties
@@ -57,6 +58,7 @@ OVERLAP = 0.4    # consecutive lines overlap along the baseline by ≥ this
                  # share of the shorter one
 SPLIT_RATIO = 2.2  # split words: bigger ≤ 2.2× smaller (user: PORTER/SQUARE)
 REFINE_TOP = 4   # layouts refined against real outlines
+PRESENCE = 0.25  # score × span^this: spanning the shape's length matters a little
 MAX_RATIO = 2.0  # biggest line ≤ 2× the smallest — one label, not a headline
                  # + footnote (run 1: SQ dwarfed ASSEMBLY, MA- dwarfed GOUN)
 
@@ -474,14 +476,18 @@ def _grow(frame, lines, adv, sizes, common, need, gap, maxgap, rows_ok,
 
 
 def _suffix_cap(rows):
-    """A suffix-only line (SQ) never outranks the name: DAVIS / giant SQ
-    read as "SQ" (run 1 lesson)."""
+    """A suffix-only line (SQ) never carries more ink than the name line:
+    DAVIS / giant SQ read as "SQ" (run 1), but capping SQ at the name's
+    *size* left TEELE / SQ's two letters looking small (user). Ink ∝
+    size × width, so SQ may be bigger than the name while it's shorter."""
     suffix = set(HERO_ABBREVIATIONS.values()) | set(HERO_ABBREVIATIONS)
-    names = [r["size"] for r in rows if r["line"] not in suffix]
+    names = [r["size"] * (r["t1"] - r["t0"]) for r in rows
+             if r["line"] not in suffix]
     if names:
         for r in rows:
-            if r["line"] in suffix and r["size"] > min(names):
-                _scale_row(r, min(names) / r["size"])
+            ink = r["size"] * (r["t1"] - r["t0"])
+            if r["line"] in suffix and ink > min(names):
+                _scale_row(r, math.sqrt(min(names) / ink))
 
 
 def _scale_row(r, f):
@@ -589,11 +595,33 @@ def refine(rows, M, ratio):
 
 # --- search ----------------------------------------------------------------------
 
-def _score(rows, pen, th, M):
+def _score(rows, pen, th, M, shape=None):
     ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"]) for r in rows)
     floor = min(r["size"] for r in rows)
-    return (math.sqrt(floor * math.sqrt(ink / M.cap)) * (1 - pen)
-            * (1 - PENALTY["tilt"] * abs(math.sin(th))))
+    sc = (math.sqrt(floor * math.sqrt(ink / M.cap)) * (1 - pen)
+          * (1 - PENALTY["tilt"] * abs(math.sin(th))))
+    if shape is not None:
+        # presence: a label bunched into one corner of a long shape reads
+        # as a footnote (user: North Point "comical"). Reward the share of
+        # the shape's length the label spans, gently.
+        sc *= _span(rows, shape) ** PRESENCE
+    return sc
+
+
+def _span(rows, shape):
+    """Share of the shape's long-axis length covered by the label."""
+    mrr = list(shape.minimum_rotated_rectangle.exterior.coords)[:4]
+    a, b = max(zip(mrr, mrr[1:] + mrr[:1]), key=lambda e: math.dist(*e))
+    L = math.dist(a, b)
+    ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+    ts = []
+    for r in rows:
+        fr = r["frame"]
+        for t in (r["t0"], r["t1"]):
+            for v in (r["v0"], r["v1"]):
+                x, y = fr.xy(t, v)
+                ts.append(x * ux + y * uy)
+    return min(1.0, (max(ts) - min(ts)) / L)
 
 
 def _splits(regs, cands, M):
@@ -654,17 +682,18 @@ def search(polygon, name, M):
     if inner.geom_type == "MultiPolygon":
         inner = max(inner.geoms, key=lambda g: g.area)
     cands = candidates(name)
-    regs = lobe_regions(inner, 2)
+    regs = lobe_regions(inner, 2) if name in HERO_SPLITS else None
     scored = []  # (score, rows, lines, pen, th, ratio)
     for th in angles(inner):
         u, p = axis(th)
         frame = Frame(inner, u, p)
         for lines, pen in cands:
             for rows in fit_lines(frame, lines, M):
-                scored.append((_score(rows, pen, th, M), rows, lines, pen, th,
-                               MAX_RATIO))
+                scored.append((_score(rows, pen, th, M, inner), rows, lines,
+                               pen, th, MAX_RATIO))
     if regs:
-        scored += _splits(regs, cands, M)
+        scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
+                   for x in _splits(regs, cands, M)]
     if not scored:
         return None
     scored.sort(key=lambda x: -x[0])
@@ -673,7 +702,7 @@ def search(polygon, name, M):
         rows = refine(rows, M, ratio)
         if rows is None:
             continue
-        sc = _score(rows, pen, th, M)
+        sc = _score(rows, pen, th, M, inner)
         if best is None or sc > best[0]:
             best = (sc, rows, lines, pen, th)
     if best is None:

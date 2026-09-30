@@ -40,8 +40,9 @@ HERO_STYLE = {
 }
 
 # the hero face: WARP_FONT=<path> overrides (phase 4 typeface comparison)
+# (user pick 2026-09-30: Barlow Condensed ExtraBold over Black)
 FONT_PATH = os.environ.get(
-    "WARP_FONT", "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf")
+    "WARP_FONT", str(ROOT / "fonts/BarlowCondensed-ExtraBold.ttf"))
 
 # taste rule: names that may break mid-word into close separate words
 SPLITS = {"HILLSIDE": "HILL SIDE"}
