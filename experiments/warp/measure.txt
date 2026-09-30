@@ -1,24 +1,24 @@
 algorithm: search
 neighborhood            coverage   spill  cap px  label
-Assembly Square           17.3%   0.0%    45.5  ASSEMBLY / SQUARE
-Ball Square               23.0%   0.2%    95.4  BALL / SQ
-Boynton Yards             26.3%   0.0%    51.1  BOYNTON / YARDS
-Brickbottom               17.7%   0.0%    55.6  BRICK- / BOTTOM
-Davis Square              16.4%   0.0%    78.9  DAVIS / SQ
-Duck Village              15.9%   0.0%    52.7  DUCK / VILLAGE
-East Somerville           20.6%   0.0%    58.1  EAST / SOMER- / VILLE
-Hillside                   8.9%   0.0%    41.7  HILLSIDE
-Inner Belt                21.6%   0.0%    74.6  INNER / BELT
-Magoun Square             18.8%   0.0%    60.6  MAGOUN / SQUARE
-North Point                8.2%   0.0%    21.2  NORTH / POINT
-Porter Square             16.2%   0.0%    44.4  PORTER / SQ
-Powder House Square       21.7%   0.0%    60.7  POWDER / HOUSE / SQ
-Spring Hill               20.3%   0.0%    81.7  SPRING / HILL
-Teele Square              20.0%   0.0%    65.0  TEELE / SQUARE
-Ten Hills                 21.6%   0.0%    78.3  TEN / HILLS
-Twin City                 11.7%   0.0%    53.8  TWIN / CITY
-Union Square              20.0%   0.0%    88.9  UNION / SQ
-Winter Hill               17.7%   0.0%    57.4  WINTER / HILL
+Assembly Square           17.7%   0.0%    46.8  ASSEMBLY / SQUARE
+Ball Square               27.5%   0.0%    98.2  BALL / SQ
+Boynton Yards             26.9%   0.0%    52.6  BOYNTON / YARDS
+Brickbottom               20.5%   0.0%    59.0  BRICK- / BOTTOM
+Davis Square              18.3%   0.0%    84.3  DAVIS / SQ
+Duck Village              18.4%   0.0%    55.2  DUCK / VILLAGE
+East Somerville           23.7%   0.0%    62.4  EAST / SOMER- / VILLE
+Hillside                   9.9%   0.0%    44.3  HILLSIDE
+Inner Belt                25.4%   0.0%    81.0  INNER / BELT
+Magoun Square             20.5%   0.0%    63.2  MAGOUN / SQUARE
+North Point               10.1%   0.0%    24.3  NORTH / PT
+Porter Square             20.2%   0.0%    39.1  PORTER / SQUARE
+Powder House Square       23.7%   0.0%    62.5  POWDER / HOUSE / SQ
+Spring Hill               23.1%   0.0%    85.4  SPRING / HILL
+Teele Square              22.4%   0.0%    67.0  TEELE / SQUARE
+Ten Hills                 23.2%   0.0%    83.1  TEN / HILLS
+Twin City                 13.6%   0.0%    57.9  TWIN CITY
+Union Square              21.9%   0.0%    94.3  UNION / SQ
+Winter Hill               19.3%   0.0%    57.4  WINTER / HILL
 ----------------------------------------
-median                    18.8%   0.0%    58.1
-worst                      8.2%   0.2%    21.2
+median                    20.5%   0.0%    62.4
+worst                      9.9%   0.0%    24.3

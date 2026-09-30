@@ -7,17 +7,20 @@ choices instead of bending letters:
     SQUARE→SQ rule (HERO_ABBREVIATIONS) applied to every form, and every
     allowed line break (spaces; "-" marks optional hyphenated breaks);
   - angle: min-rect long axis, the longest straight edges, horizontal,
-    and a 15° sweep (phase 3a);
-  - placement: each line at its own position across the shape (3a).
-  Still to come: region splits, reading-order check (3b); curved
-  baselines (phase 6).
+    and a 15° sweep;
+  - placement: each line at its own position across the shape, lines
+    kept together (bounded gap, horizontal overlap);
+  - size trades: a line may shrink so its siblings grow;
+  - split: a 2-line label may put one word in each lobe of a bent shape
+    (HILL / SIDE), both at one angle so they read the same way.
+Curved baselines come later (phase 6).
 
-Each candidate is sized line by line: a line sits in a band as tall as
-its cap height, and gets the widest interval along the axis where the
-whole band is inside the (inward-buffered) polygon. Score = inked box
-legibility first — the smallest line's size × (1 − penalty) — with
-total ink as a tiebreak, so shortenings and hyphen breaks must win by a
-margin, and one giant short line can't buy the win (run 1 lesson).
+Sizing runs on a raster of the shape (fast, conservative boxes); the top
+few layouts are then refined against the real glyph outlines — letters
+tuck into corners their boxes can't (the empty top-right of an L), and
+descending tails (Q) are caught. Score = √(smallest size × √ink) ×
+(1 − penalties): legibility and fill balanced, shortenings, hyphen
+breaks, splits and tilt must win by a margin.
 """
 
 import itertools
@@ -25,15 +28,20 @@ import math
 import sys
 from pathlib import Path
 
+import shapely
+from shapely.affinity import affine_transform
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
 
 from config.words import HERO_ABBREVIATIONS, HERO_VARIANTS  # noqa: E402
+from typemap.fills import _polygons  # noqa: E402
 
 # score penalties (fractions of ink): the full name should win ties
 PENALTY = {"abbrev": 0.08, "hyphen": 0.12, "variant": 0.04,
+           "split": 0.10,  # a label in two places reads less as one
            "tilt": 0.06}  # × |sin angle|: horizontal reads easiest
 MAX_LINES = 3
 LEADING = 0.30   # gap between stacked lines, as a fraction of cap height
@@ -43,6 +51,12 @@ MIN_SIZE = 6     # below this a candidate is infeasible
 GRID = 160       # raster cells across the shape's longer extent
 ANGLE_STEP = 15  # degrees, coarse sweep
 TRADE = 0.8      # a line may give up 20% so its siblings can grow
+MAX_GAP = 1.0    # lines stay together: gap ≤ this × the upper line's cap
+                 # (North Point had NORTH and POINT at opposite ends)
+OVERLAP = 0.4    # consecutive lines overlap along the baseline by ≥ this
+                 # share of the shorter one
+SPLIT_RATIO = 2.2  # split words: bigger ≤ 2.2× smaller (user: PORTER/SQUARE)
+REFINE_TOP = 4   # layouts refined against real outlines
 MAX_RATIO = 2.0  # biggest line ≤ 2× the smallest — one label, not a headline
                  # + footnote (run 1: SQ dwarfed ASSEMBLY, MA- dwarfed GOUN)
 
@@ -119,13 +133,105 @@ class Metrics:
         b = glyphs["bounds"](self.cmap[ord("H")])
         self.cap = b[3] / self.upm  # cap height, em
 
+        self._line_polys = {}
+
+    def line_poly(self, text: str):
+        """Union of the line's glyph outlines, font units, pen at x=0."""
+        if text not in self._line_polys:
+            parts, x = [], 0
+            for ch in text:
+                g = self.cmap.get(ord(ch))
+                if g is None:
+                    continue
+                pen = _FlatPen(self.gs)
+                self.gs[g].draw(pen)
+                for c in pen.contours:
+                    if len(c) >= 3:
+                        parts.append(affine_transform(
+                            Polygon(c).buffer(0), [1, 0, 0, 1, x, 0]))
+                x += self.gs[g].width
+            self._line_polys[text] = unary_union(parts)
+        return self._line_polys[text]
+
     def advance(self, text: str) -> float:
         """Advance width of `text` in em (no kerning — phase 4)."""
         return sum(self.gs[self.cmap[ord(ch)]].width
                    for ch in text if ord(ch) in self.cmap) / self.upm
 
 
+def _flat_pen_class():
+    from fontTools.pens.basePen import BasePen
+
+    class FlatPen(BasePen):
+        """Glyph outline → polylines (curves sampled)."""
+
+        def __init__(self, gs):
+            super().__init__(gs)
+            self.contours, self.cur = [], []
+
+        def _moveTo(self, pt):
+            self.cur = [pt]
+
+        def _lineTo(self, pt):
+            self.cur.append(pt)
+
+        def _curveToOne(self, p1, p2, p3):
+            (x0, y0) = self.cur[-1]
+            for i in range(1, 7):
+                t = i / 6
+                a, b, c, d = (1 - t) ** 3, 3 * t * (1 - t) ** 2, 3 * t * t * (1 - t), t ** 3
+                self.cur.append((a * x0 + b * p1[0] + c * p2[0] + d * p3[0],
+                                 a * y0 + b * p1[1] + c * p2[1] + d * p3[1]))
+
+        def _closePath(self):
+            if len(self.cur) >= 3:
+                self.contours.append(self.cur)
+            self.cur = []
+
+        _endPath = _closePath
+
+    return FlatPen
+
+
+def _FlatPen(gs):
+    global _FLAT
+    try:
+        cls = _FLAT
+    except NameError:
+        cls = _FLAT = _flat_pen_class()
+    return cls(gs)
+
+
 # --- geometry ----------------------------------------------------------------
+
+def lobe_regions(polygon, n):
+    """Split a lobed polygon into n regions by erosion, or None (from the
+    envelope experiment: erode until n sizable cores appear, grow each
+    back, clip; the largest core claims the shared elbow first)."""
+    area = polygon.area
+    best = None
+    for fr in (0.05, 0.08, 0.11, 0.15, 0.19):
+        r = fr * math.sqrt(area)
+        comps = sorted((g for g in _polygons(polygon.buffer(-r))
+                        if g.area > 0.005 * area),
+                       key=lambda g: g.area, reverse=True)
+        if len(comps) >= n and (best is None or comps[n - 1].area > best[0]):
+            best = (comps[n - 1].area, comps[:n], r)
+    if best is None:
+        return None
+    _, comps, r = best
+    regs, claimed = [], None
+    for comp in comps:
+        reg = comp.buffer(r * 1.3).intersection(polygon)
+        if claimed is not None:
+            reg = reg.difference(claimed)
+        reg = max(_polygons(reg), key=lambda g: g.area, default=None)
+        if reg is None:
+            return None
+        claimed = reg if claimed is None else claimed.union(reg)
+        regs.append(reg)
+    return regs
+
 
 def axis(theta):
     """(u, p) for baseline angle theta (radians, screen coords): u reads
@@ -167,9 +273,9 @@ class Frame:
 
     def __init__(self, polygon, u, p):
         import numpy as np
-        import shapely
 
         self.poly, self.u, self.p = polygon, u, p
+        shapely.prepare(polygon)
         self.c = polygon.centroid
         tv = [self.tv(xy) for xy in polygon.exterior.coords]
         t0, t1 = min(t for t, _ in tv), max(t for t, _ in tv)
@@ -219,13 +325,11 @@ class Frame:
 
 def fit_lines(frame, lines, M):
     """Place `lines` top to bottom, each at its own position across the
-    shape (not a fixed centered stack — user notes: DUCK/VILLAGE want
-    more space between them, Brickbottom wants to hug its long side).
+    shape, kept together.
 
     1. Binary-search the largest common size s where the lines fit in
        order: each line takes the earliest row where a band of its cap
-       height has a run ≥ its width (earliest-fit is optimal for an
-       ordered packing), then a leading gap.
+       height has a run ≥ its width, within MAX_GAP of the line above.
     2. Trade-offs: from s, or with some lines dropped to TRADE × s.
     3. Spread + grow: each line re-centers in the window its neighbors
        allow and grows (≤ MAX_RATIO × its smallest sibling) there.
@@ -234,12 +338,16 @@ def fit_lines(frame, lines, M):
     res = frame.res
     adv = [M.advance(ln) for ln in lines]
     nv = frame.free.shape[0]
+    np = frame.np
 
     def need(s, a):  # (band rows, run cols) for a line of size s
         return (max(1, math.ceil(s * M.cap / res)), math.ceil(s * a / res))
 
     def gap(s):
         return math.ceil(LEADING * s * M.cap / res)
+
+    def maxgap(s):
+        return math.ceil(MAX_GAP * s * M.cap / res)
 
     def rows_ok(s, a):
         hr, wr = need(s, a)
@@ -248,64 +356,49 @@ def fit_lines(frame, lines, M):
         run, _ = frame.widest(hr)
         return run >= wr
 
-    def pack(s):
-        """Earliest-fit start rows at common size s, or None."""
-        starts, cur = [], 0
-        for a in adv:
-            ok = rows_ok(s, a)
-            if ok is None:
-                return None
-            idx = frame.np.flatnonzero(ok[cur:])
-            if not len(idx):
-                return None
-            r = cur + int(idx[0])
-            starts.append(r)
-            cur = r + need(s, a)[0] + gap(s)
-        return starts
-
     def pack_sized(sizes):
-        starts, cur = [], 0
+        """Earliest-fit start rows, lines within MAX_GAP; or None."""
+        starts, cur, prev = [], 0, None
         for s, a in zip(sizes, adv):
             ok = rows_ok(s, a)
             if ok is None:
                 return None
-            idx = frame.np.flatnonzero(ok[cur:])
+            hi = nv if prev is None else min(nv, cur + maxgap(prev) - gap(prev) + 1)
+            idx = np.flatnonzero(ok[cur:hi])
             if not len(idx):
                 return None
             r = cur + int(idx[0])
             starts.append(r)
-            cur = r + need(s, a)[0] + gap(s)
+            cur, prev = r + need(s, a)[0] + gap(s), s
         return starts
 
-    lo, hi = 0.0, MAX_SIZE
-    if pack(MIN_SIZE) is None:
-        return None
-    lo = MIN_SIZE
+    n = len(lines)
+    if pack_sized([MIN_SIZE] * n) is None:
+        return []
+    lo, hi = MIN_SIZE, MAX_SIZE
     for _ in range(14):
         mid = (lo + hi) / 2
-        if pack(mid) is not None:
+        if pack_sized([mid] * n) is not None:
             lo = mid
         else:
             hi = mid
     common = lo
-    # size trade-offs: every line at the common size, or some lines give
-    # up 20% so the others can grow (user: BALL could be much bigger if
-    # SQ were smaller — pure max-min scoring kept them equal)
-    n = len(lines)
     plans = [(1.0,) * n] + [tuple(TRADE if k in drop else 1.0 for k in range(n))
                             for r_ in range(1, n)
                             for drop in itertools.combinations(range(n), r_)]
     out = []
     for plan in plans:
         rows = _grow(frame, lines, adv, [common * m for m in plan], common,
-                     need, gap, rows_ok, pack_sized, M)
+                     need, gap, maxgap, rows_ok, pack_sized, M)
         if rows:
             out.append(rows)
     return out
 
 
-def _grow(frame, lines, adv, sizes, common, need, gap, rows_ok, pack_sized, M):
+def _grow(frame, lines, adv, sizes, common, need, gap, maxgap, rows_ok,
+          pack_sized, M):
     """Spread + grow from base `sizes`, then realize boxes. Rows or None."""
+    np = frame.np
     nv = frame.free.shape[0]
     starts = pack_sized(sizes)
     if starts is None:
@@ -318,36 +411,37 @@ def _grow(frame, lines, adv, sizes, common, need, gap, rows_ok, pack_sized, M):
         for k in range(len(lines) - 1, i, -1):
             ok = rows_ok(s_list[k], adv[k])
             hr = need(s_list[k], adv[k])[0]
-            idx = frame.np.flatnonzero(ok[:max(0, end - hr + 1)])
+            idx = np.flatnonzero(ok[:max(0, end - hr + 1)])
             if not len(idx):
                 return None
             end = int(idx[-1]) - gap(s_list[k])
         return end - need(s_list[i], adv[i])[0] + 1
 
-    cur = 0
+    cur, prev = 0, None
     for i, a in enumerate(adv):
         best = None
         s = sizes[i]
         while s <= cap + 1e-9:
             trial = sizes[:i] + [s] + sizes[i + 1:]
             last = latest_bound(i, trial)
+            if prev is not None and last is not None:
+                last = min(last, cur + maxgap(prev) - gap(prev))
             ok = rows_ok(s, a)
             if ok is None or last is None or last < cur:
                 break
-            idx = frame.np.flatnonzero(ok[cur:last + 1])
+            idx = np.flatnonzero(ok[cur:last + 1])
             if not len(idx):
                 break
             cand = cur + idx
-            # center of the feasible stretch nearest the window's middle
             mid = (cur + last) / 2
-            best = (s, int(cand[frame.np.argmin(abs(cand - mid))]))
+            best = (s, int(cand[np.argmin(abs(cand - mid))]))
             s *= 1.04
         if best is None:
             return None
         sizes[i], starts[i] = best
-        cur = starts[i] + need(sizes[i], a)[0] + gap(sizes[i])
+        cur, prev = starts[i] + need(sizes[i], a)[0] + gap(sizes[i]), sizes[i]
 
-    rows = []
+    rows, prev_mid = [], None
     for ln, s, a, r0 in zip(lines, sizes, adv, starts):
         hr, _ = need(s, a)
         run, end = frame.widest(hr)
@@ -355,19 +449,20 @@ def _grow(frame, lines, adv, sizes, common, need, gap, rows_ok, pack_sized, M):
         c0 = frame.tmin + (e - L + 1) * frame.res
         c1 = frame.tmin + (e + 1) * frame.res
         w = s * a
-        mid = (c0 + c1) / 2
+        # first line centers in its run; later lines lean toward the line
+        # above (one block, not scattered words)
+        target = (c0 + c1) / 2 if prev_mid is None else prev_mid
+        mid = min(max(target, c0 + w / 2), c1 - w / 2)
         v0 = frame.vmin + r0 * frame.res
         rows.append({"line": ln, "size": s, "t0": mid - w / 2, "t1": mid + w / 2,
-                     "v0": v0, "v1": v0 + s * M.cap})
-    # a suffix-only line (SQ) never outranks the name: DAVIS / giant SQ
-    # read as "SQ" (run 1 lesson, back once lines could trade size)
-    suffix = set(HERO_ABBREVIATIONS.values()) | set(HERO_ABBREVIATIONS)
-    names = [r["size"] for r in rows if r["line"] not in suffix]
-    if names:
-        for r in rows:
-            if r["line"] in suffix and r["size"] > min(names):
-                _scale_row(r, min(names) / r["size"])
-    # exact check (the raster is ± one cell): shrink offenders
+                     "v0": v0, "v1": v0 + s * M.cap, "frame": frame})
+        prev_mid = mid
+    for ra, rb in zip(rows, rows[1:]):
+        ov = min(ra["t1"], rb["t1"]) - max(ra["t0"], rb["t0"])
+        if ov < OVERLAP * min(ra["t1"] - ra["t0"], rb["t1"] - rb["t0"]):
+            return None
+    _suffix_cap(rows)
+    # exact box check (the raster is ± one cell): shrink offenders
     for _ in range(30):
         bad = [r for r in rows if not frame.box(
             r["t0"], r["t1"], r["v0"], r["v1"]).within(frame.poly)]
@@ -378,51 +473,222 @@ def _grow(frame, lines, adv, sizes, common, need, gap, rows_ok, pack_sized, M):
     return None
 
 
+def _suffix_cap(rows):
+    """A suffix-only line (SQ) never outranks the name: DAVIS / giant SQ
+    read as "SQ" (run 1 lesson)."""
+    suffix = set(HERO_ABBREVIATIONS.values()) | set(HERO_ABBREVIATIONS)
+    names = [r["size"] for r in rows if r["line"] not in suffix]
+    if names:
+        for r in rows:
+            if r["line"] in suffix and r["size"] > min(names):
+                _scale_row(r, min(names) / r["size"])
+
+
 def _scale_row(r, f):
-    """Shrink a row's size and box by `f` about the box center."""
+    """Scale a row's size and box by `f` about the box center."""
     mid, vm = (r["t0"] + r["t1"]) / 2, (r["v0"] + r["v1"]) / 2
     hw, hh = (r["t1"] - r["t0"]) / 2 * f, (r["v1"] - r["v0"]) / 2 * f
     r["size"] *= f
     r["t0"], r["t1"], r["v0"], r["v1"] = mid - hw, mid + hw, vm - hh, vm + hh
 
 
+def _shift_row(r, dt, dv):
+    r["t0"] += dt
+    r["t1"] += dt
+    r["v0"] += dv
+    r["v1"] += dv
+
+
+# --- outline refinement --------------------------------------------------------
+
+def outline(r, M):
+    """The row's real glyph outlines on the page."""
+    fr = r["frame"]
+    (ux, uy), (px, py) = fr.u, fr.p
+    k = r["size"] / M.upm
+    ox, oy = fr.xy(r["t0"], r["v1"])  # pen start on the baseline
+    return affine_transform(M.line_poly(r["line"]),
+                            [ux * k, -px * k, uy * k, -py * k, ox, oy])
+
+
+def refine(rows, M, ratio):
+    """Fit rows to their real outlines: shrink what pokes out (Q tails),
+    then grow each row — nudging it a little along and across the
+    baseline — while its outline stays inside and clear of its siblings.
+    Returns the refined rows or None."""
+    rows = [dict(r) for r in rows]
+    shapes = [outline(r, M) for r in rows]
+
+    def clear(i, shp):
+        gap = 0.5 * LEADING * M.cap * min(r["size"] for r in rows)
+        return all(shp.distance(shapes[j]) >= gap
+                   for j in range(len(rows)) if j != i)
+
+    def bands_apart(i, r):
+        """Stacked lines keep their cap bands apart: outlines alone let
+        SQUARE's letters slot between PORTER's (interlocked, unreadable)."""
+        # the packing's own leading — tighter read as interlocked
+        g = LEADING * M.cap * min(x["size"] for x in rows)
+        for j, o in enumerate(rows):
+            if j == i or o["frame"] is not r["frame"]:
+                continue
+            if j < i and o["v1"] + g > r["v0"]:
+                return False
+            if j > i and r["v1"] + g > o["v0"]:
+                return False
+        return True
+
+    def ok(i, r):
+        if not bands_apart(i, r):
+            return False, None
+        shp = outline(r, M)
+        return (shp.within(r["frame"].poly) and clear(i, shp)), shp
+
+    def attempt(i, f):
+        r0 = rows[i]
+        d = 0.04 * r0["size"]
+        for dt, dv in ((0, 0), (d, 0), (-d, 0), (0, d), (0, -d),
+                       (2 * d, 0), (-2 * d, 0), (0, 2 * d), (0, -2 * d)):
+            r = dict(r0)
+            _scale_row(r, f)
+            _shift_row(r, dt, dv)
+            good, shp = ok(i, r)
+            if good:
+                rows[i], shapes[i] = r, shp
+                return True
+        return False
+
+    for i in range(len(rows)):  # 1. make every row legal
+        tries = 0
+        while not ok(i, rows[i])[0]:
+            if not attempt(i, 0.97):
+                _scale_row(rows[i], 0.97)
+            shapes[i] = outline(rows[i], M)
+            tries += 1
+            if tries > 30:
+                return None
+    grew = True  # 2. grow round-robin, respecting the size ratios
+    for _ in range(20):
+        if not grew:
+            break
+        grew = False
+        for i in range(len(rows)):
+            others = [r["size"] for j, r in enumerate(rows) if j != i]
+            limit = min([MAX_SIZE] + [ratio * s for s in others])
+            if rows[i]["size"] * 1.03 > limit:
+                continue
+            if attempt(i, 1.03):
+                grew = True
+    before = [r["size"] for r in rows]
+    _suffix_cap(rows)
+    if [r["size"] for r in rows] != before:
+        for i, r in enumerate(rows):
+            shapes[i] = outline(r, M)
+    return rows
+
+
+# --- search ----------------------------------------------------------------------
+
+def _score(rows, pen, th, M):
+    ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"]) for r in rows)
+    floor = min(r["size"] for r in rows)
+    return (math.sqrt(floor * math.sqrt(ink / M.cap)) * (1 - pen)
+            * (1 - PENALTY["tilt"] * abs(math.sin(th))))
+
+
+def _splits(regs, cands, M):
+    """One word per lobe (HILL / SIDE in Hillside's legs). Each lobe takes
+    its own best angle — at a shared angle the small lobe starves (Hillside:
+    33k vs 7.6k px², ~45px) — letters stay upright via axis(), and the
+    first word must sit in the lobe that comes first in reading order.
+    A hyphen at the split is dropped: two words, not a broken one."""
+    fits = {}  # (lobe, word) -> (rows, theta) best single-line fit
+
+    def best(k, word):
+        if (k, word) not in fits:
+            top = None
+            for th in angles(regs[k]):
+                u, p = axis(th)
+                for rows in fit_lines(Frame(regs[k], u, p), [word], M):
+                    if top is None or rows[0]["size"] > top[0][0]["size"]:
+                        top = (rows, th)
+            fits[k, word] = top
+        return fits[k, word]
+
+    out = []
+    for lines, pen in cands:
+        if len(lines) != 2:
+            continue
+        hyph = lines[0].endswith("-")
+        words = [lines[0].rstrip("-"), lines[1]]
+        pen = pen - (PENALTY["hyphen"] if hyph else 0) + PENALTY["split"]
+        for order in ((0, 1), (1, 0)):
+            got = [best(k, w) for k, w in zip(order, words)]
+            if None in got:
+                continue
+            (r1, th1), (r2, th2) = got
+            u, p = axis(th1)
+            c1, c2 = regs[order[0]].centroid, regs[order[1]].centroid
+            dv = (c2.x - c1.x) * p[0] + (c2.y - c1.y) * p[1]
+            dt = (c2.x - c1.x) * u[0] + (c2.y - c1.y) * u[1]
+            if 2 * dv + dt <= 0:  # second word must read after the first
+                continue
+            parts = [dict(r1[0]), dict(r2[0])]
+            lo_ = min(r["size"] for r in parts)
+            for r in parts:  # one label: cap the size contrast
+                if r["size"] > SPLIT_RATIO * lo_:
+                    _scale_row(r, SPLIT_RATIO * lo_ / r["size"])
+            _suffix_cap(parts)
+            th = th1 if abs(math.sin(th1)) > abs(math.sin(th2)) else th2
+            out.append((_score(parts, pen, th, M), parts, tuple(words), pen, th,
+                        SPLIT_RATIO))
+    return out
+
+
 def search(polygon, name, M):
-    """Best layout for `name` in `polygon` over candidates × angles."""
+    """Best layout for `name` in `polygon` over candidates × angles
+    (stacked, or split across lobes), refined against real outlines."""
     inner = polygon.buffer(-MARGIN)
     if inner.is_empty:
         return None
     if inner.geom_type == "MultiPolygon":
         inner = max(inner.geoms, key=lambda g: g.area)
     cands = candidates(name)
-    best = None
+    regs = lobe_regions(inner, 2)
+    scored = []  # (score, rows, lines, pen, th, ratio)
     for th in angles(inner):
         u, p = axis(th)
         frame = Frame(inner, u, p)
-        tilt = PENALTY["tilt"] * abs(math.sin(th))
         for lines, pen in cands:
             for rows in fit_lines(frame, lines, M):
-                # balance legibility (smallest line) and ink (√area is
-                # size-like): pure max-min kept BALL no bigger than SQ
-                ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"])
-                          for r in rows)
-                floor = min(r["size"] for r in rows)
-                score = (math.sqrt(floor * math.sqrt(ink / M.cap))
-                         * (1 - pen) * (1 - tilt))
-                if best is None or score > best[0]:
-                    best = (score, rows, lines, pen, frame, th)
+                scored.append((_score(rows, pen, th, M), rows, lines, pen, th,
+                               MAX_RATIO))
+    if regs:
+        scored += _splits(regs, cands, M)
+    if not scored:
+        return None
+    scored.sort(key=lambda x: -x[0])
+    best = None
+    for _, rows, lines, pen, th, ratio in scored[:REFINE_TOP]:
+        rows = refine(rows, M, ratio)
+        if rows is None:
+            continue
+        sc = _score(rows, pen, th, M)
+        if best is None or sc > best[0]:
+            best = (sc, rows, lines, pen, th)
     if best is None:
         return None
-    return {"rows": best[1], "frame": best[4], "lines": best[2],
-            "penalty": best[3], "angle": math.degrees(best[5])}
+    return {"rows": best[1], "lines": best[2], "penalty": best[3],
+            "angle": math.degrees(best[4])}
 
 
 def render(doc, result, M, fill):
     """Emit glyph outlines, undistorted, along each row's baseline."""
     from fontTools.pens.svgPathPen import SVGPathPen
 
-    fr = result["frame"]
-    (ux, uy), (px, py) = fr.u, fr.p
     for r in result["rows"]:
+        fr = r["frame"]
+        (ux, uy), (px, py) = fr.u, fr.p
         k = r["size"] / M.upm
         pen_t = r["t0"]
         for ch in r["line"]:
