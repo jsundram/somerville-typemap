@@ -1,24 +1,24 @@
 algorithm: search
 neighborhood            coverage   spill  cap px  label
-Assembly Square           22.0%   0.0%    60.0  ASSEM- / BLY SQ
+Assembly Square           17.3%   0.0%    45.5  ASSEMBLY / SQUARE
 Ball Square               23.0%   0.2%    95.4  BALL / SQ
-Boynton Yards             20.4%   0.0%    53.3  BOYNTON / YARDS
-Brickbottom               17.5%   0.0%    55.6  BRICK- / BOTTOM
-Davis Square              17.4%   0.0%    78.9  DAVIS / SQ
-Duck Village              14.2%   0.0%    54.0  DUCK / VILLAGE
-East Somerville           20.5%   0.0%    58.1  EAST / SOMER- / VILLE
+Boynton Yards             26.3%   0.0%    51.1  BOYNTON / YARDS
+Brickbottom               17.7%   0.0%    55.6  BRICK- / BOTTOM
+Davis Square              16.4%   0.0%    78.9  DAVIS / SQ
+Duck Village              15.9%   0.0%    52.7  DUCK / VILLAGE
+East Somerville           20.6%   0.0%    58.1  EAST / SOMER- / VILLE
 Hillside                   8.9%   0.0%    41.7  HILLSIDE
-Inner Belt                21.3%   0.0%    74.6  INNER / BELT
-Magoun Square             18.8%   0.0%    60.5  MAGOUN / SQUARE
-North Point                7.9%   0.0%    23.6  NORTH / PT
-Porter Square             15.9%   0.0%    44.4  PORTER / SQ
-Powder House Square       18.8%   0.0%    60.8  POWDER / HOUSE SQ
-Spring Hill               19.9%   0.0%    80.5  SPRING / HILL
-Teele Square              17.5%   0.0%    75.1  TEELE / SQ
+Inner Belt                21.6%   0.0%    74.6  INNER / BELT
+Magoun Square             18.8%   0.0%    60.6  MAGOUN / SQUARE
+North Point                8.2%   0.0%    21.2  NORTH / POINT
+Porter Square             16.2%   0.0%    44.4  PORTER / SQ
+Powder House Square       21.7%   0.0%    60.7  POWDER / HOUSE / SQ
+Spring Hill               20.3%   0.0%    81.7  SPRING / HILL
+Teele Square              20.0%   0.0%    65.0  TEELE / SQUARE
 Ten Hills                 21.6%   0.0%    78.3  TEN / HILLS
 Twin City                 11.7%   0.0%    53.8  TWIN / CITY
-Union Square              19.4%   0.0%    88.9  UNION / SQ
-Winter Hill               14.5%   0.0%    58.4  WINTER / HILL
+Union Square              20.0%   0.0%    88.9  UNION / SQ
+Winter Hill               17.7%   0.0%    57.4  WINTER / HILL
 ----------------------------------------
-median                    18.8%   0.0%    60.0
-worst                      7.9%   0.2%    23.6
+median                    18.8%   0.0%    58.1
+worst                      8.2%   0.2%    21.2

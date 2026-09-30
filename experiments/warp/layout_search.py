@@ -42,6 +42,7 @@ MAX_SIZE = 220   # em size cap (px)
 MIN_SIZE = 6     # below this a candidate is infeasible
 GRID = 160       # raster cells across the shape's longer extent
 ANGLE_STEP = 15  # degrees, coarse sweep
+TRADE = 0.8      # a line may give up 20% so its siblings can grow
 MAX_RATIO = 2.0  # biggest line ≤ 2× the smallest — one label, not a headline
                  # + footnote (run 1: SQ dwarfed ASSEMBLY, MA- dwarfed GOUN)
 
@@ -225,9 +226,10 @@ def fit_lines(frame, lines, M):
        order: each line takes the earliest row where a band of its cap
        height has a run ≥ its width (earliest-fit is optimal for an
        ordered packing), then a leading gap.
-    2. Spread: each line re-centers in the window its neighbors allow.
-    3. Grow: each line grows (≤ MAX_RATIO × s) within its window.
-    Returns rows or None.
+    2. Trade-offs: from s, or with some lines dropped to TRADE × s.
+    3. Spread + grow: each line re-centers in the window its neighbors
+       allow and grows (≤ MAX_RATIO × its smallest sibling) there.
+    Returns a list of row-sets (one per trade-off that fits).
     """
     res = frame.res
     adv = [M.advance(ln) for ln in lines]
@@ -261,6 +263,20 @@ def fit_lines(frame, lines, M):
             cur = r + need(s, a)[0] + gap(s)
         return starts
 
+    def pack_sized(sizes):
+        starts, cur = [], 0
+        for s, a in zip(sizes, adv):
+            ok = rows_ok(s, a)
+            if ok is None:
+                return None
+            idx = frame.np.flatnonzero(ok[cur:])
+            if not len(idx):
+                return None
+            r = cur + int(idx[0])
+            starts.append(r)
+            cur = r + need(s, a)[0] + gap(s)
+        return starts
+
     lo, hi = 0.0, MAX_SIZE
     if pack(MIN_SIZE) is None:
         return None
@@ -271,13 +287,32 @@ def fit_lines(frame, lines, M):
             lo = mid
         else:
             hi = mid
-    floor = lo
-    sizes = [floor] * len(lines)
-    starts = pack(floor)
+    common = lo
+    # size trade-offs: every line at the common size, or some lines give
+    # up 20% so the others can grow (user: BALL could be much bigger if
+    # SQ were smaller — pure max-min scoring kept them equal)
+    n = len(lines)
+    plans = [(1.0,) * n] + [tuple(TRADE if k in drop else 1.0 for k in range(n))
+                            for r_ in range(1, n)
+                            for drop in itertools.combinations(range(n), r_)]
+    out = []
+    for plan in plans:
+        rows = _grow(frame, lines, adv, [common * m for m in plan], common,
+                     need, gap, rows_ok, pack_sized, M)
+        if rows:
+            out.append(rows)
+    return out
 
-    # spread + grow, top to bottom; the window for line i runs from the
-    # end of line i-1 to where lines i+1.. still fit (latest-fit bound)
-    def latest_bound(i, s_list, starts):
+
+def _grow(frame, lines, adv, sizes, common, need, gap, rows_ok, pack_sized, M):
+    """Spread + grow from base `sizes`, then realize boxes. Rows or None."""
+    nv = frame.free.shape[0]
+    starts = pack_sized(sizes)
+    if starts is None:
+        return None
+    cap = min(MAX_SIZE, MAX_RATIO * min(sizes), MAX_RATIO * common)
+
+    def latest_bound(i, s_list):
         """Last start row for line i so lines i+1.. still fit below."""
         end = nv
         for k in range(len(lines) - 1, i, -1):
@@ -293,9 +328,9 @@ def fit_lines(frame, lines, M):
     for i, a in enumerate(adv):
         best = None
         s = sizes[i]
-        while s <= min(MAX_SIZE, MAX_RATIO * floor) + 1e-9:
+        while s <= cap + 1e-9:
             trial = sizes[:i] + [s] + sizes[i + 1:]
-            last = latest_bound(i, trial, starts)
+            last = latest_bound(i, trial)
             ok = rows_ok(s, a)
             if ok is None or last is None or last < cur:
                 break
@@ -324,6 +359,14 @@ def fit_lines(frame, lines, M):
         v0 = frame.vmin + r0 * frame.res
         rows.append({"line": ln, "size": s, "t0": mid - w / 2, "t1": mid + w / 2,
                      "v0": v0, "v1": v0 + s * M.cap})
+    # a suffix-only line (SQ) never outranks the name: DAVIS / giant SQ
+    # read as "SQ" (run 1 lesson, back once lines could trade size)
+    suffix = set(HERO_ABBREVIATIONS.values()) | set(HERO_ABBREVIATIONS)
+    names = [r["size"] for r in rows if r["line"] not in suffix]
+    if names:
+        for r in rows:
+            if r["line"] in suffix and r["size"] > min(names):
+                _scale_row(r, min(names) / r["size"])
     # exact check (the raster is ± one cell): shrink offenders
     for _ in range(30):
         bad = [r for r in rows if not frame.box(
@@ -357,16 +400,16 @@ def search(polygon, name, M):
         frame = Frame(inner, u, p)
         tilt = PENALTY["tilt"] * abs(math.sin(th))
         for lines, pen in cands:
-            rows = fit_lines(frame, lines, M)
-            if not rows:
-                continue
-            ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"]) for r in rows)
-            # legibility first (smallest line), ink as a ~1% tiebreak
-            floor = min(r["size"] for r in rows)
-            score = (floor * (1 - pen) * (1 - tilt)
-                     * (1 + 0.01 * ink / inner.area))
-            if best is None or score > best[0]:
-                best = (score, rows, lines, pen, frame, th)
+            for rows in fit_lines(frame, lines, M):
+                # balance legibility (smallest line) and ink (√area is
+                # size-like): pure max-min kept BALL no bigger than SQ
+                ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"])
+                          for r in rows)
+                floor = min(r["size"] for r in rows)
+                score = (math.sqrt(floor * math.sqrt(ink / M.cap))
+                         * (1 - pen) * (1 - tilt))
+                if best is None or score > best[0]:
+                    best = (score, rows, lines, pen, frame, th)
     if best is None:
         return None
     return {"rows": best[1], "frame": best[4], "lines": best[2],
