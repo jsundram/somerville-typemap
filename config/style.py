@@ -10,14 +10,31 @@ HERO_FONT = "Arial Rounded MT Bold, Cooper Black, Chalkboard SE, sans-serif"
 
 PAPER = "#faf7f0"
 
-# One playful color per neighborhood hero label (rainbow-map style).
-# Keys are matched against feature names; UNASSIGNED cycles for the rest.
-HERO_COLORS = {
-    "Union Square": "#d13c8f",
-    "Davis Square": "#e8542a",
-    "Winter Hill": "#7a3fbf",
+# Hero label colors (user, 2026-09-30): an area named for a T stop takes
+# its line's color — Davis/Porter red, Ball/Magoun/Union/East Somerville
+# green (GLX), Assembly orange. Same-line neighbors (Davis|Porter,
+# Ball|Magoun, Union|East Somerville) alternate two shades of the line.
+# Every other area gets a neutral that is never a line color, graph-colored
+# so neighbors differ. HERO_COLORS pins individual areas.
+HERO_TRANSIT = {
+    "Davis Square": "red", "Porter Square": "red",
+    "Ball Square": "green", "Magoun Square": "green",
+    "Union Square": "green", "East Somerville": "green",
+    "Assembly Square": "orange",
 }
+LINE_SHADES = {
+    "red": ["#da291c", "#9c1d14"],
+    "green": ["#00843d", "#005c2b"],
+    "orange": ["#ed8b00", "#b06400"],
+}
+HERO_NEUTRALS = ["#2f6aa8", "#7a3fbf", "#d13c8f", "#4f5d75", "#1f6f8b",
+                 "#8e4585", "#6b5b4e"]
+HERO_COLORS = {"Winter Hill": "#7a3fbf"}
+# the SOMERVILLE title's letter colors
 HERO_CYCLE = ["#d13c8f", "#e8542a", "#2f8f4e", "#2f6aa8", "#e8a02a", "#7a3fbf"]
+# hero typeface: glyph outlines come from this file (fonttools), so the
+# print doesn't depend on installed fonts
+HERO_FONT_FILE = "fonts/BarlowCondensed-ExtraBold.ttf"
 
 LAYERS = {
     # Areas — small repeated text conforming to the polygon

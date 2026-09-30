@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["shapely>=2.0", "pyproj>=3.6"]
+# dependencies = ["shapely>=2.0", "pyproj>=3.6", "fonttools>=4.50", "numpy"]
 # ///
 """Assemble the Somerville typographic map as separate toggleable layers.
 
@@ -23,7 +23,9 @@ from shapely import STRtree
 from shapely.geometry import LineString, MultiLineString, Point, shape
 from shapely.ops import linemerge, substring, transform, unary_union
 
-from config.style import HERO_CYCLE, LAYERS, PAPER
+from config.style import (HERO_COLORS, HERO_CYCLE, HERO_FONT_FILE,
+                          HERO_NEUTRALS, HERO_TRANSIT, LAYERS, LINE_SHADES,
+                          PAPER)
 from config.words import (LINE_COLORS, PATH_FAMILY, PERCEIVED_BORDERS,
                           PERCEIVED_LABELS, RAIL_MAINLINES, RAIL_RENAME,
                           STATION_LINES, TOWNS, WORD_OVERRIDES)
@@ -31,6 +33,7 @@ from typemap.borders import (_clean_lines, chain_route, classify,
                              shared_borders, split_chunks)
 from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
+from typemap import hero_layout
 from typemap.osm import load_layers, _relation_polygon
 from typemap.svgdoc import (SvgDoc, est_width, path_d, repeat_to_length,
                             write_combined)
@@ -138,8 +141,19 @@ def main():
         if not g.is_empty and g.area >= 15000:
             towns_pg.append((cfg.get("display", tags["name"]), cfg["color"], g))
 
-    hood_color = color_regions(hoods_pg, HERO_CYCLE,
-                               fixed=[(color, g) for _, color, g in towns_pg])
+    # hero colors: pinned, then transit-line areas (shades alternate
+    # between same-line neighbors), then neutrals that avoid everything
+    # already placed around them
+    hood_color = {n: HERO_COLORS[n] for n, _ in hoods_pg if n in HERO_COLORS}
+    for line, shades in LINE_SHADES.items():
+        members = [(n, g) for n, g in hoods_pg
+                   if HERO_TRANSIT.get(n) == line and n not in hood_color]
+        hood_color.update(color_regions(members, shades))
+    placed = [(hood_color[n], g) for n, g in hoods_pg if n in hood_color]
+    rest = [(n, g) for n, g in hoods_pg if n not in hood_color]
+    hood_color.update(color_regions(
+        rest, HERO_NEUTRALS,
+        fixed=placed + [(color, g) for _, color, g in towns_pg]))
 
     docs = {}
 
@@ -556,8 +570,12 @@ def main():
 
     # ── L5 neighborhood hero typography (fitted, not just a curve)
     L5 = layer("L5_heroes")
+    hero_M = hero_layout.Metrics.load(ROOT / HERO_FONT_FILE)
     for name, geom in hoods_pg:
-        fitted_hero(L5, geom, name, {**LAYERS["hero"], "fill": hood_color[name]})
+        # layout search over undistorted glyph outlines (typemap/hero_layout)
+        res = hero_layout.search(geom, name, hero_M)
+        if res is not None:
+            hero_layout.render(L5, res, hero_M, hood_color[name])
     tspans = "".join(
         f'<tspan fill="{HERO_CYCLE[i % len(HERO_CYCLE)]}">{ch}</tspan>'
         for i, ch in enumerate("SOMERVILLE"))

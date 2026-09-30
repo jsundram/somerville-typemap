@@ -22,7 +22,6 @@ from shapely.affinity import scale as ascale, translate
 
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).parent))
 
 from typemap.fills import (PER_CHAR_HERO, _partitions, _polygons,  # noqa: E402
                            fitted_hero, polygon_ds)
@@ -646,9 +645,9 @@ CELL_INFO = {}
 
 def algo_search(doc, polygon, name):
     """Layout search over undistorted glyphs (README algorithm 4)."""
-    import layout_search as ls
+    from typemap import hero_layout as ls
 
-    M = ls.Metrics(_glyphs())
+    M = ls.Metrics.load(FONT_PATH)
     res = ls.search(polygon, name, M)
     if res is None:
         return

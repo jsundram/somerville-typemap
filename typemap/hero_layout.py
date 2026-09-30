@@ -1,4 +1,7 @@
-"""Hero layout search — algorithm 4 in README.md.
+"""Hero layout search — neighborhood names fitted into their polygons.
+
+Developed in experiments/warp (algorithm 4 in its README, the spec and
+results log); promoted to the engine for L5.
 
 Undistorted glyph outlines; the layout is *searched* over discrete
 choices instead of bending letters:
@@ -25,16 +28,11 @@ breaks, splits and tilt must win by a margin.
 
 import itertools
 import math
-import sys
-from pathlib import Path
 
 import shapely
 from shapely.affinity import affine_transform
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
-
-ROOT = Path(__file__).parents[2]
-sys.path.insert(0, str(ROOT))
 
 from config.words import (HERO_ABBREVIATIONS, HERO_SPLITS,  # noqa: E402
                           HERO_VARIANTS)
@@ -127,9 +125,32 @@ def candidates(name: str):
     return list(seen.items())
 
 
+_METRICS = {}
+
+
 # --- font metrics ------------------------------------------------------------
 
 class Metrics:
+    @classmethod
+    def load(cls, path):
+        """Metrics for the font file at `path` (cached per path)."""
+        path = str(path)
+        if path not in _METRICS:
+            from fontTools.pens.boundsPen import BoundsPen
+            from fontTools.ttLib import TTFont
+
+            f = TTFont(path)
+            gs = f.getGlyphSet()
+
+            def bounds(g):
+                pen = BoundsPen(gs)
+                gs[g].draw(pen)
+                return pen.bounds
+
+            _METRICS[path] = cls({"gs": gs, "cmap": f.getBestCmap(),
+                                  "upm": f["head"].unitsPerEm, "bounds": bounds})
+        return _METRICS[path]
+
     def __init__(self, glyphs):
         self.gs, self.cmap, self.upm = glyphs["gs"], glyphs["cmap"], glyphs["upm"]
         b = glyphs["bounds"](self.cmap[ord("H")])

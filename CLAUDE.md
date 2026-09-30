@@ -33,8 +33,13 @@ over the previously-published scratchpad file and republishing the same path.
   unique when layer docs are combined (`write_combined`).
 - `typemap/fills.py` — the engine: `linepack_fill` (rows clipped to
   polygon), `contour_fill` (text on inward-buffered rings, upright-run
-  splitting), `street_label`, `fitted_hero` (crammed multi-line heroes,
-  geometric containment).
+  splitting), `street_label`, `fitted_hero` (older crammed heroes; still
+  used for L4 town labels).
+- `typemap/hero_layout.py` — L5 neighborhood heroes: layout search over
+  undistorted glyph outlines (variants × breaks × angles × placement ×
+  size trades, refined against real outlines). Font file, transit colors
+  in config/style.py; variants/splits in config/words.py. Developed in
+  experiments/warp (its README is the spec + results log).
 - `typemap/osm.py` — Overpass JSON → layered shapely geometries. Streets
   merged per name; unnamed water inherits waterway-centerline names;
   culverted streams excluded; route relations carry the Community Path.
