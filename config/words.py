@@ -129,3 +129,9 @@ HERO_VARIANTS = {
 # Hillside's two legs). Opt-in: on other shapes a split scatters the words
 # (North Point read NORTH … PT at opposite tips).
 HERO_SPLITS = {"Hillside", "Porter Square"}
+
+# Labels set along a curved baseline (the shape's smoothed spine) even when
+# a straight layout would fit bigger — e.g. North Point, whose best straight
+# layout bunches into the fat corner ("comical", user). Curves already
+# compete on score for every long, thin shape; this forces them.
+HERO_CURVES = set()

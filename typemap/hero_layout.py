@@ -34,13 +34,14 @@ from shapely.affinity import affine_transform
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from config.words import (HERO_ABBREVIATIONS, HERO_SPLITS,  # noqa: E402
+from config.words import (HERO_ABBREVIATIONS, HERO_CURVES, HERO_SPLITS,  # noqa: E402
                           HERO_VARIANTS)
 from typemap.fills import _polygons  # noqa: E402
 
 # score penalties (fractions of ink): the full name should win ties
 PENALTY = {"abbrev": 0.08, "hyphen": 0.12, "variant": 0.04,
            "split": 0.10,  # a label in two places reads less as one
+           "curve": 0.06,  # a curved baseline reads a little slower
            "tilt": 0.06}  # × |sin angle|: horizontal reads easiest
 MAX_LINES = 3
 LEADING = 0.30   # gap between stacked lines, as a fraction of cap height
@@ -56,6 +57,7 @@ OVERLAP = 0.4    # consecutive lines overlap along the baseline by ≥ this
                  # share of the shorter one
 SPLIT_RATIO = 2.2  # split words: bigger ≤ 2.2× smaller (user: PORTER/SQUARE)
 REFINE_TOP = 4   # layouts refined against real outlines
+CURVE_ELONGATION = 3.0  # only shapes ≥ this long/wide try curved baselines
 PRESENCE = 0.25  # score × span^this: spanning the shape's length matters a little
 MAX_RATIO = 2.0  # biggest line ≤ 2× the smallest — one label, not a headline
                  # + footnote (run 1: SQ dwarfed ASSEMBLY, MA- dwarfed GOUN)
@@ -614,6 +616,200 @@ def refine(rows, M, ratio):
     return rows
 
 
+# --- curved baselines (phase 6) ------------------------------------------------
+
+def centerline(poly, step=2.0):
+    """The shape's spine: the longest path through the medial axis
+    (Voronoi edges of boundary samples that lie inside), smoothed and
+    resampled every `step` px, oriented to read left→right (bottom→top
+    when vertical). Returns [(x, y)] or None."""
+    import heapq
+
+    from shapely.geometry import LineString, MultiPoint
+
+    ring = poly.exterior
+    n = 240
+    pts = MultiPoint([ring.interpolate(i / n, normalized=True) for i in range(n)])
+    from shapely.ops import voronoi_diagram
+    vor = voronoi_diagram(pts, edges=True)  # a collection of multilines
+    edges = [e for g in vor.geoms for e in getattr(g, "geoms", [g])
+             if e.within(poly)]
+    if not edges:
+        return None
+    adj = {}
+    for e in edges:
+        a, b = (tuple(round(c, 3) for c in e.coords[0]),
+                tuple(round(c, 3) for c in e.coords[-1]))
+        w = e.length
+        adj.setdefault(a, []).append((b, w))
+        adj.setdefault(b, []).append((a, w))
+
+    def far(src):
+        dist, prev, pq = {src: 0.0}, {}, [(0.0, src)]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if d > dist[u]:
+                continue
+            for v, w in adj[u]:
+                if d + w < dist.get(v, math.inf):
+                    dist[v], prev[v] = d + w, u
+                    heapq.heappush(pq, (d + w, v))
+        end = max(dist, key=dist.get)
+        return end, prev
+
+    # tree diameter (two sweeps) on the largest component
+    start = max(adj, key=lambda k: len(adj[k]))
+    a, _ = far(start)
+    b, prev = far(a)
+    path = [b]
+    while path[-1] in prev:
+        path.append(prev[path[-1]])
+    if len(path) < 3:
+        return None
+    line = LineString(path).simplify(step * 2)
+    cs = list(line.coords)
+    for _ in range(3):  # Chaikin smoothing, endpoints kept
+        cs = ([cs[0]] + [q for p0, p1 in zip(cs, cs[1:])
+                         for q in ((0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]),
+                                   (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]))]
+              + [cs[-1]])
+    line = LineString(cs)
+    dx, dy = cs[-1][0] - cs[0][0], cs[-1][1] - cs[0][1]
+    if dx < -1e-6 or (abs(dx) <= 1e-6 and dy > 0):
+        line = LineString(cs[::-1])
+    k = max(2, int(line.length / step))
+    pts = [line.interpolate(i / k, normalized=True).coords[0] for i in range(k + 1)]
+    # moving-average smoothing (~48 px window, 3 passes; ends pinned): the
+    # medial axis wiggles with every notch in the boundary, and letters
+    # riding those wiggles pinch together (run 1: HI LL, TW N)
+    q = max(2, int(24 / step))
+    for _ in range(3):
+        pts = [pts[0]] + [
+            (sum(x for x, _ in pts[max(0, i - q):i + q + 1]) / len(pts[max(0, i - q):i + q + 1]),
+             sum(y for _, y in pts[max(0, i - q):i + q + 1]) / len(pts[max(0, i - q):i + q + 1]))
+            for i in range(1, len(pts) - 1)] + [pts[-1]]
+    # resample evenly again: callers index the spine by distance / step
+    line = LineString(pts)
+    k = max(2, int(line.length / step))
+    return [line.interpolate(i / k, normalized=True).coords[0] for i in range(k + 1)]
+
+
+def fit_curve(poly, line, M):
+    """Set `line` along the shape's spine: the largest size where some
+    stretch of the spine has clearance ≥ half the cap height (plus a
+    little for curvature) all along the word. Returns a row or None."""
+    spine = centerline(poly)
+    if spine is None:
+        return None
+    step = math.dist(spine[0], spine[1])
+    bnd = poly.exterior
+    clear = [bnd.distance(shapely.Point(p)) for p in spine]
+    n = len(spine)
+    ang = [math.atan2(spine[min(n - 1, i + 1)][1] - spine[max(0, i - 1)][1],
+                      spine[min(n - 1, i + 1)][0] - spine[max(0, i - 1)][0])
+           for i in range(n)]
+    # curvature: turning across ±10 px, per px
+    q = max(1, int(10 / step))
+    kappa = [abs(math.remainder(ang[min(n - 1, i + q)] - ang[max(0, i - q)],
+                                math.tau)) / (2 * q * step) for i in range(n)]
+    adv = M.advance(line)
+
+    def window(sz):
+        """Start index of the best window fitting size sz, or None."""
+        nwin = max(1, int(sz * adv / step))
+        half = sz * M.cap / 2
+        # letters pinch on the inside of a bend by ~cap/radius: keep the
+        # radius ≥ 3 cap heights under the whole word (≤ ~15% squeeze),
+        # and the word's total turn modest
+        kmax = 1 / (3 * sz * M.cap)
+        best = None
+        for i in range(0, n - nwin):
+            lo = min(clear[i:i + nwin + 1])
+            if lo < half * 1.08 or max(kappa[i:i + nwin + 1]) > kmax:
+                continue
+            if abs(math.remainder(ang[i + nwin] - ang[i], math.tau)) > math.radians(35):
+                continue
+            if best is None or lo > best[1]:
+                best = (i, lo)
+        return best[0] if best else None
+
+    lo_s, hi_s = MIN_SIZE, MAX_SIZE
+    if window(lo_s) is None:
+        return None
+    for _ in range(14):
+        mid = (lo_s + hi_s) / 2
+        if window(mid) is not None:
+            lo_s = mid
+        else:
+            hi_s = mid
+    for _ in range(20):  # exact outline check, shrinking if needed
+        row = _curve_row(spine, step, ang, line, lo_s, window(lo_s), M)
+        if row and row["curve"]["shape"].within(poly):
+            return row
+        lo_s *= 0.97
+        if window(lo_s) is None:
+            return None
+    return None
+
+
+def _curve_row(spine, step, ang, line, sz, i0, M):
+    """Glyphs placed along the spine from sample i0, each rotated to the
+    tangent at its center, the spine running through mid cap height."""
+    if i0 is None:
+        return None
+    k = sz / M.upm
+    half = sz * M.cap / 2
+    pos = i0 * step
+    glyphs, parts, corners = [], [], []
+    for ch in line:
+        g = M.cmap.get(ord(ch))
+        if g is None:
+            continue
+        w = M.gs[g].width * k
+        c = pos + w / 2
+
+        def at(d):
+            j = max(0, min(len(spine) - 2, int(d / step)))
+            f = d / step - j
+            return (spine[j][0] + (spine[j + 1][0] - spine[j][0]) * f,
+                    spine[j][1] + (spine[j + 1][1] - spine[j][1]) * f)
+
+        x, y = at(c)
+        # the glyph's angle is the chord across its own width, not one
+        # noisy sample's tangent
+        (ax_, ay_), (bx_, by_) = at(pos), at(pos + max(w, 1e-3))
+        th = math.atan2(by_ - ay_, bx_ - ax_)
+        ux, uy = math.cos(th), math.sin(th)
+        px, py = -uy, ux  # screen-down relative to the text
+        ox, oy = x - ux * w / 2 + px * half, y - uy * w / 2 + py * half
+        m = [ux * k, -px * k, uy * k, -py * k, ox, oy]
+        glyphs.append((ch, g, m))
+        if ch != " ":
+            parts.append(affine_transform(M.line_poly(ch), m))
+        for tt in (0, w):
+            for vv in (-half, half):
+                corners.append((x + ux * (tt - w / 2) + px * vv,
+                                y + uy * (tt - w / 2) + py * vv))
+        pos += w
+        if pos > len(spine) * step:
+            return None
+    width = sz * M.advance(line)
+    return {"line": line, "size": sz, "t0": 0.0, "t1": width, "v0": 0.0,
+            "v1": sz * M.cap, "frame": None,
+            "curve": {"glyphs": glyphs, "shape": unary_union(parts),
+                      "corners": corners,
+                      "angle": math.atan2(corners[-1][1] - corners[0][1],
+                                          corners[-1][0] - corners[0][0])}}
+
+
+def _elongation(poly):
+    mrr = list(poly.minimum_rotated_rectangle.exterior.coords)[:4]
+    a, b = math.dist(mrr[0], mrr[1]), math.dist(mrr[1], mrr[2])
+    # long side over mean width (area / length) — slivers and bent strips
+    L = max(a, b)
+    return L / max(poly.area / L, 1e-6)
+
+
 # --- search ----------------------------------------------------------------------
 
 def _score(rows, pen, th, M, shape=None):
@@ -637,6 +833,9 @@ def _span(rows, shape):
     ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
     ts = []
     for r in rows:
+        if "curve" in r:
+            ts += [x * ux + y * uy for x, y in r["curve"]["corners"]]
+            continue
         fr = r["frame"]
         for t in (r["t0"], r["t1"]):
             for v in (r["v0"], r["v1"]):
@@ -715,12 +914,26 @@ def search(polygon, name, M):
     if regs:
         scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
                    for x in _splits(regs, cands, M)]
+    forced = name in HERO_CURVES
+    if forced or _elongation(inner) >= CURVE_ELONGATION:
+        if forced:
+            scored = []  # curve only (config HERO_CURVES)
+        for lines, pen in cands:
+            if len(lines) != 1:
+                continue
+            row = fit_curve(inner, lines[0], M)
+            if row is not None:
+                pen_c = pen + PENALTY["curve"]
+                th = row["curve"]["angle"]
+                scored.append((_score([row], pen_c, th, M, inner), [row], lines,
+                               pen_c, th, MAX_RATIO))
     if not scored:
         return None
     scored.sort(key=lambda x: -x[0])
     best = None
     for _, rows, lines, pen, th, ratio in scored[:REFINE_TOP]:
-        rows = refine(rows, M, ratio)
+        if not any("curve" in r for r in rows):  # curves are exact already
+            rows = refine(rows, M, ratio)
         if rows is None:
             continue
         sc = _score(rows, pen, th, M, inner)
@@ -737,6 +950,17 @@ def render(doc, result, M, fill):
     from fontTools.pens.svgPathPen import SVGPathPen
 
     for r in result["rows"]:
+        if "curve" in r:
+            for ch, g, m in r["curve"]["glyphs"]:
+                if ch == " ":
+                    continue
+                sp = SVGPathPen(M.gs, ntos=lambda v: f"{v:.1f}")
+                M.gs[g].draw(sp)
+                a, b, c, d, e, f = m[0], m[2], m[1], m[3], m[4], m[5]
+                doc.raw(f'<path transform="matrix({a:.5f} {b:.5f} {c:.5f} '
+                        f'{d:.5f} {e:.2f} {f:.2f})" d="{sp.getCommands()}" '
+                        f'fill="{fill}"/>')
+            continue
         fr = r["frame"]
         (ux, uy), (px, py) = fr.u, fr.p
         k = r["size"] / M.upm
