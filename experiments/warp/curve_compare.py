@@ -2,20 +2,14 @@
 # requires-python = ">=3.11"
 # dependencies = ["shapely>=2.0", "fonttools>=4.50", "numpy"]
 # ///
-"""Curved vs straight hero layouts, side by side, for the thin shapes.
+"""Hero layout modes, side by side, for the thin shapes.
 
     uv run experiments/warp/curve_compare.py      # → compare/curves.svg
 
-Row 0: how the spine is built — Voronoi cells of boundary samples
-(gray), the skeleton = Voronoi edges inside the shape (tan), the longest
-route through it (blue), the route smoothed at ±24/60/120 px (red,
-light→dark), straight extensions past both ends (green, dashed).
-Row 1: the layout search forced onto curved baselines (config
-HERO_CURVES), the chosen spine in red. Row 2: forced swell — per-letter
-sizes (config HERO_SWELL), on a spine or a straight axis. Row 3: the
-same search with curves and swell off. Each cell notes the label and its
-line sizes (swell: smallest–largest letter).
-Row 4: forced word breaks at sharp bends of the skeleton route (HERO_BENDS).
+One row per mode (named in the left column), one column per shape. The
+top row shows how the spine is built; every other cell shows its layout
+and its **ink coverage** (glyph outlines inside ÷ shape area). The best
+score for each shape is highlighted green.
 """
 
 import json
@@ -39,7 +33,27 @@ from typemap.svgdoc import SvgDoc  # noqa: E402
 
 NAMES = ["North Point", "Hillside", "Porter Square", "Brickbottom", "Twin City"]
 CELL, PAD = 520, 26
-HEAD = 70  # header band per cell: title + big coverage score
+HEAD = 70     # header band per cell: title + big coverage score
+GUTTER = 250  # left column: row names
+GOOD = "#2f8f4e"
+
+# (key, row title, description, how to force it)
+MODES = [
+    ("construction", "SPINE", "how the curved\nbaseline is built", None),
+    ("curved", "CURVED", "one line along\nthe smoothed spine", "curves"),
+    ("swell", "SWELL", "letter sizes follow\nthe room (≤12% steps)", "swell"),
+    ("bends", "BENDS ≤45°", "words split at sharp\nbends, ≤45° apart", "bends45"),
+    ("bends30", "BENDS ≤30°", "same, words ≤30° apart\n(more continuous)", "bends30"),
+    ("straight", "STRAIGHT", "straight baselines\nonly (the default)", "straight"),
+]
+
+
+def X(col):
+    return GUTTER + col * CELL
+
+
+def Y(row):
+    return row * (CELL + HEAD)
 
 
 def cell_poly(name, col, row, feats):
@@ -47,7 +61,7 @@ def cell_poly(name, col, row, feats):
     minx, miny, maxx, maxy = poly.bounds
     k = min((CELL - 2 * PAD) / (maxx - minx), (CELL - 2 * PAD) / (maxy - miny))
     return translate(ascale(poly, k, k, origin=(minx, miny)),
-                     col * CELL + PAD - minx, row * (CELL + HEAD) + HEAD + PAD - miny)
+                     X(col) + PAD - minx, Y(row) + HEAD + PAD - miny)
 
 
 def coverage(poly, res, M):
@@ -57,14 +71,28 @@ def coverage(poly, res, M):
     return ink.intersection(poly).area / poly.area
 
 
-def header(doc, col, row, title, score=None):
-    y = row * (CELL + HEAD)
-    doc.raw(f'<text x="{col * CELL + 10}" y="{y + 22}" font-size="16" '
+def header(doc, col, row, title, score=None, best=False):
+    y = Y(row)
+    if best:  # the winning cell for this shape
+        doc.raw(f'<rect x="{X(col) + 3}" y="{y + 3}" width="{CELL - 6}" '
+                f'height="{CELL + HEAD - 6}" rx="10" fill="#eaf5ec" '
+                f'stroke="{GOOD}" stroke-width="3"/>')
+    doc.raw(f'<text x="{X(col) + 12}" y="{y + 24}" font-size="16" '
             f'font-family="monospace" fill="#666">{title}</text>')
     if score is not None:
-        doc.raw(f'<text x="{col * CELL + 10}" y="{y + 60}" font-size="34" '
-                f'font-weight="bold" font-family="monospace" fill="#222">'
-                f'{score:.1%} ink</text>')
+        tag = "  ★ best" if best else ""
+        doc.raw(f'<text x="{X(col) + 12}" y="{y + 62}" font-size="34" '
+                f'font-weight="bold" font-family="monospace" '
+                f'fill="{GOOD if best else "#222"}">{score:.1%} ink{tag}</text>')
+
+
+def row_label(doc, row, title, desc):
+    y = Y(row) + (CELL + HEAD) / 2 - 20
+    doc.raw(f'<text x="{GUTTER - 24}" y="{y}" font-size="30" font-weight="bold" '
+            f'font-family="monospace" text-anchor="end" fill="#222">{title}</text>')
+    for i, ln in enumerate(desc.split("\n")):
+        doc.raw(f'<text x="{GUTTER - 24}" y="{y + 30 + i * 22}" font-size="16" '
+                f'font-family="monospace" text-anchor="end" fill="#777">{ln}</text>')
 
 
 def _path(pts, style):
@@ -109,15 +137,15 @@ def construction(doc, poly, name, col, row):
         ext = st["extended"]
         sm_pts = st["smoothed"]
         # the extensions: each extended end back to its smoothed end
-        y0 = row * (CELL + HEAD) + HEAD
-        box = shapely_box(col * CELL + 4, y0, (col + 1) * CELL - 4, y0 + CELL - 4)
+        y0 = Y(row) + HEAD
+        box = shapely_box(X(col) + 4, y0, X(col) + CELL - 4, y0 + CELL - 4)
         for tip in (ext[0], ext[-1]):
             near = min((sm_pts[0], sm_pts[-1]), key=lambda q: math.dist(q, tip))
             seg = LineString([near, tip]).intersection(box)  # stay in the cell
             if not seg.is_empty:
                 doc.raw(_path(list(seg.coords), 'stroke="#2f8f4e" stroke-width="1.5" '
                                                 'stroke-dasharray="6 4"'))
-    header(doc, col, row, f"{name} — how the spine is built")
+    header(doc, col, row, f"{name}")
     if col == 0:  # legend, in North Point's empty lower half
         items = [("#c9c9c9", "Voronoi cells of 240 boundary samples"),
                  ("#d9a441", "skeleton: Voronoi edges inside the shape"),
@@ -126,45 +154,68 @@ def construction(doc, poly, name, col, row):
                  ("#f4a09a", "smoothed ±24 px"), ("#e5534b", "smoothed ±60 px"),
                  ("#2f8f4e", "extensions (30% of length, straight)")]
         for i, (color, label) in enumerate(items):
-            y = row * (CELL + HEAD) + HEAD + 300 + i * 24
+            y = Y(row) + HEAD + 300 + i * 24
             dash = (' stroke-dasharray="6 4"' if "extensions" in label else
                     ' stroke-dasharray="2 3"' if "roomiest" in label else "")
-            doc.raw(f'<line x1="{col * CELL + 30}" y1="{y}" x2="{col * CELL + 70}" '
+            doc.raw(f'<line x1="{X(col) + 30}" y1="{y}" x2="{X(col) + 70}" '
                     f'y2="{y}" stroke="{color}" stroke-width="3"{dash}/>')
-            doc.raw(f'<text x="{col * CELL + 80}" y="{y + 5}" font-size="14" '
+            doc.raw(f'<text x="{X(col) + 80}" y="{y + 5}" font-size="14" '
                     f'font-family="monospace" fill="#555">{label}</text>')
+
+
+def force(mode):
+    """Set hero_layout's switches so the search produces only this mode."""
+    hl.HERO_CURVES.clear()
+    hl.HERO_SWELL.clear()
+    hl.HERO_BENDS.clear()
+    hl.CURVE_ELONGATION = _SAVED["elong"]
+    hl.SPLIT_TURN = _SAVED["turn"]
+    if mode == "curves":
+        hl.HERO_CURVES.update(NAMES)
+    elif mode == "swell":
+        hl.HERO_SWELL.update(NAMES)
+    elif mode in ("bends45", "bends30"):
+        hl.HERO_BENDS.update(NAMES)
+        hl.SPLIT_TURN = 30.0 if mode == "bends30" else 45.0
+    elif mode == "straight":
+        hl.CURVE_ELONGATION = float("inf")  # curves, swell, bends off
 
 
 def main():
     feats = {f["name"]: f for f in json.loads((HERE / "shapes.json").read_text())["features"]}
     M = hl.Metrics.load(RS.FONT_PATH)
-    modes = ("construction", "curved", "swell", "bends", "straight")
-    doc = SvgDoc(len(NAMES) * CELL, len(modes) * (CELL + HEAD), background="#ffffff")
-    saved = set(hl.HERO_CURVES), set(hl.HERO_SWELL), hl.CURVE_ELONGATION
-    for row, mode in enumerate(modes):
-        hl.HERO_CURVES.clear()
-        hl.HERO_SWELL.clear()
-        hl.HERO_BENDS.clear()
-        hl.CURVE_ELONGATION = saved[2]
-        if mode == "curved":
-            hl.HERO_CURVES.update(NAMES)
-        elif mode == "swell":
-            hl.HERO_SWELL.update(NAMES)
-        elif mode == "bends":
-            hl.HERO_BENDS.update(NAMES)
-        else:
-            hl.CURVE_ELONGATION = float("inf")  # curves + swell off
+    _SAVED.update(curves=set(hl.HERO_CURVES), swell=set(hl.HERO_SWELL),
+                  elong=hl.CURVE_ELONGATION, turn=hl.SPLIT_TURN)
+    doc = SvgDoc(GUTTER + len(NAMES) * CELL, len(MODES) * (CELL + HEAD),
+                 background="#ffffff")
+    # pass 1: search every cell (so the best per shape is known)
+    cells = {}
+    for row, (key, title, desc, how) in enumerate(MODES):
+        if how is None:
+            continue
+        force(how)
         for col, name in enumerate(NAMES):
             poly = cell_poly(name, col, row, feats)
-            if mode == "construction":
-                construction(doc, poly, name, col, row)
+            res = hl.search(poly, name, M)
+            score = coverage(poly, res, M) if res else None
+            cells[row, col] = (poly, res, score)
+    top = {col: max(cells[k][2] or 0 for k in cells if k[1] == col)
+           for col in range(len(NAMES))}
+    # ties (within 0.05 pt) all count as best
+    best = {k: (cells[k][2] or 0) >= top[k[1]] - 0.0005 for k in cells}
+    # pass 2: draw
+    for row, (key, title, desc, how) in enumerate(MODES):
+        row_label(doc, row, title, desc)
+        for col, name in enumerate(NAMES):
+            if how is None:
+                construction(doc, cell_poly(name, col, row, feats), name, col, row)
                 continue
+            poly, res, score = cells[row, col]
+            header(doc, col, row, "", score, best=best[row, col])  # backdrop
             doc.raw(f'<path d="{" ".join(polygon_ds(poly))}" fill="none" '
                     f'stroke="#888" stroke-width="4"/>')
-            res = hl.search(poly, name, M)
-            note, score = "no fit", None
+            note = "no fit"
             if res is not None:
-                score = coverage(poly, res, M)
                 fr = res["rows"][0]["frame"]
                 if isinstance(fr, hl.SpineFrame):
                     # the spine runs past the shape (extended ends); show
@@ -172,25 +223,25 @@ def main():
                     inside = LineString(fr.P).intersection(poly)
                     for part in getattr(inside, "geoms", [inside]):
                         if isinstance(part, LineString) and not part.is_empty:
-                            doc.raw('<path d="M ' + " L ".join(
-                                f"{x:.1f},{y:.1f}" for x, y in part.coords)
-                                + '" fill="none" stroke="#e33" stroke-width="1.5"/>')
+                            doc.raw(_path(list(part.coords),
+                                          'stroke="#e33" stroke-width="1.5"'))
                 hl.render(doc, res, M, "#333")
                 note = (" / ".join(res["lines"]) + "  ·  " + ", ".join(
                     f"{round(min(r['sizes']))}–{round(max(r['sizes']))}"
                     if "sizes" in r else str(round(r["size"]))
                     for r in res["rows"]))
-            header(doc, col, row, f"{name} — {mode}: {note}", score)
-    hl.HERO_BENDS.clear()
-    hl.HERO_CURVES.clear()
-    hl.HERO_CURVES.update(saved[0])
-    hl.HERO_SWELL.clear()
-    hl.HERO_SWELL.update(saved[1])
-    hl.CURVE_ELONGATION = saved[2]
+            doc.raw(f'<text x="{X(col) + 12}" y="{Y(row) + 24}" font-size="16" '
+                    f'font-family="monospace" fill="#666">{name} · {note}</text>')
+    force(None)
+    hl.HERO_CURVES.update(_SAVED["curves"])
+    hl.HERO_SWELL.update(_SAVED["swell"])
     out = HERE / "compare/curves.svg"
     out.parent.mkdir(exist_ok=True)
     doc.write(out)
     print(f"wrote {out}")
+
+
+_SAVED = {}
 
 
 if __name__ == "__main__":
