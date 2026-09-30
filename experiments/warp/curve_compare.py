@@ -25,6 +25,7 @@ from pathlib import Path
 
 from shapely.affinity import scale as ascale, translate
 from shapely.geometry import LineString, box as shapely_box, shape
+from shapely.ops import unary_union
 
 HERE = Path(__file__).parent
 ROOT = HERE.parents[1]
@@ -38,6 +39,7 @@ from typemap.svgdoc import SvgDoc  # noqa: E402
 
 NAMES = ["North Point", "Hillside", "Porter Square", "Brickbottom", "Twin City"]
 CELL, PAD = 520, 26
+HEAD = 70  # header band per cell: title + big coverage score
 
 
 def cell_poly(name, col, row, feats):
@@ -45,7 +47,24 @@ def cell_poly(name, col, row, feats):
     minx, miny, maxx, maxy = poly.bounds
     k = min((CELL - 2 * PAD) / (maxx - minx), (CELL - 2 * PAD) / (maxy - miny))
     return translate(ascale(poly, k, k, origin=(minx, miny)),
-                     col * CELL + PAD - minx, row * CELL + PAD - miny)
+                     col * CELL + PAD - minx, row * (CELL + HEAD) + HEAD + PAD - miny)
+
+
+def coverage(poly, res, M):
+    """Ink share of the shape: glyph outlines inside ÷ shape area — the
+    black-pixels-over-shape-pixels ratio, computed exactly."""
+    ink = unary_union([hl.outline(r, M) for r in res["rows"]])
+    return ink.intersection(poly).area / poly.area
+
+
+def header(doc, col, row, title, score=None):
+    y = row * (CELL + HEAD)
+    doc.raw(f'<text x="{col * CELL + 10}" y="{y + 22}" font-size="16" '
+            f'font-family="monospace" fill="#666">{title}</text>')
+    if score is not None:
+        doc.raw(f'<text x="{col * CELL + 10}" y="{y + 60}" font-size="34" '
+                f'font-weight="bold" font-family="monospace" fill="#222">'
+                f'{score:.1%} ink</text>')
 
 
 def _path(pts, style):
@@ -90,16 +109,15 @@ def construction(doc, poly, name, col, row):
         ext = st["extended"]
         sm_pts = st["smoothed"]
         # the extensions: each extended end back to its smoothed end
-        box = shapely_box(col * CELL + 4, row * CELL + 22,
-                          (col + 1) * CELL - 4, (row + 1) * CELL - 4)
+        y0 = row * (CELL + HEAD) + HEAD
+        box = shapely_box(col * CELL + 4, y0, (col + 1) * CELL - 4, y0 + CELL - 4)
         for tip in (ext[0], ext[-1]):
             near = min((sm_pts[0], sm_pts[-1]), key=lambda q: math.dist(q, tip))
             seg = LineString([near, tip]).intersection(box)  # stay in the cell
             if not seg.is_empty:
                 doc.raw(_path(list(seg.coords), 'stroke="#2f8f4e" stroke-width="1.5" '
                                                 'stroke-dasharray="6 4"'))
-    doc.raw(f'<text x="{col * CELL + 8}" y="{row * CELL + 16}" font-size="12" '
-            f'font-family="monospace" fill="#999">{name} — construction</text>')
+    header(doc, col, row, f"{name} — how the spine is built")
     if col == 0:  # legend, in North Point's empty lower half
         items = [("#c9c9c9", "Voronoi cells of 240 boundary samples"),
                  ("#d9a441", "skeleton: Voronoi edges inside the shape"),
@@ -108,7 +126,7 @@ def construction(doc, poly, name, col, row):
                  ("#f4a09a", "smoothed ±24 px"), ("#e5534b", "smoothed ±60 px"),
                  ("#2f8f4e", "extensions (30% of length, straight)")]
         for i, (color, label) in enumerate(items):
-            y = row * CELL + 300 + i * 24
+            y = row * (CELL + HEAD) + HEAD + 300 + i * 24
             dash = (' stroke-dasharray="6 4"' if "extensions" in label else
                     ' stroke-dasharray="2 3"' if "roomiest" in label else "")
             doc.raw(f'<line x1="{col * CELL + 30}" y1="{y}" x2="{col * CELL + 70}" '
@@ -121,7 +139,7 @@ def main():
     feats = {f["name"]: f for f in json.loads((HERE / "shapes.json").read_text())["features"]}
     M = hl.Metrics.load(RS.FONT_PATH)
     modes = ("construction", "curved", "swell", "bends", "straight")
-    doc = SvgDoc(len(NAMES) * CELL, len(modes) * CELL, background="#ffffff")
+    doc = SvgDoc(len(NAMES) * CELL, len(modes) * (CELL + HEAD), background="#ffffff")
     saved = set(hl.HERO_CURVES), set(hl.HERO_SWELL), hl.CURVE_ELONGATION
     for row, mode in enumerate(modes):
         hl.HERO_CURVES.clear()
@@ -144,8 +162,9 @@ def main():
             doc.raw(f'<path d="{" ".join(polygon_ds(poly))}" fill="none" '
                     f'stroke="#888" stroke-width="4"/>')
             res = hl.search(poly, name, M)
-            note = "no fit"
+            note, score = "no fit", None
             if res is not None:
+                score = coverage(poly, res, M)
                 fr = res["rows"][0]["frame"]
                 if isinstance(fr, hl.SpineFrame):
                     # the spine runs past the shape (extended ends); show
@@ -161,8 +180,7 @@ def main():
                     f"{round(min(r['sizes']))}–{round(max(r['sizes']))}"
                     if "sizes" in r else str(round(r["size"]))
                     for r in res["rows"]))
-            doc.raw(f'<text x="{col * CELL + 8}" y="{row * CELL + 16}" font-size="12" '
-                    f'font-family="monospace" fill="#999">{name} — {mode}: {note}</text>')
+            header(doc, col, row, f"{name} — {mode}: {note}", score)
     hl.HERO_BENDS.clear()
     hl.HERO_CURVES.clear()
     hl.HERO_CURVES.update(saved[0])

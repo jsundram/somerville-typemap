@@ -57,6 +57,7 @@ MAX_GAP = 1.0    # lines stay together: gap ≤ this × the upper line's cap
                  # (North Point had NORTH and POINT at opposite ends)
 OVERLAP = 0.4    # consecutive lines overlap along the baseline by ≥ this
                  # share of the shorter one
+SPLIT_TURN = 45.0  # split words' reading directions differ by ≤ this (°)
 SPLIT_RATIO = 2.2  # split words: bigger ≤ 2.2× smaller (user: PORTER/SQUARE)
 REFINE_TOP = 4   # layouts refined against real outlines
 SWELL_STEP = 0.12   # swell: neighboring letters differ by ≤ 12%
@@ -1104,18 +1105,40 @@ def _splits(regs, cands, M, consecutive=False):
     33k vs 7.6k px², ~45px) — letters stay upright via axis(), and the
     first word must sit in the lobe that comes first in reading order.
     A hyphen at the split is dropped: two words, not a broken one."""
-    fits = {}  # (lobe, word) -> (rows, theta) best single-line fit
+    fits = {}  # (lobe, word) -> [(size, rows, theta)] per angle
 
-    def best(k, word):
+    def options(k, word):
+        """Every angle's best single-line fit of `word` in lobe k."""
         if (k, word) not in fits:
-            top = None
+            got = []
             for th in angles(regs[k]):
                 u, p = axis(th)
-                for rows in fit_lines(Frame(regs[k], u, p), [word], M):
-                    if top is None or rows[0]["size"] > top[0][0]["size"]:
-                        top = (rows, th)
-            fits[k, word] = top
+                res = fit_lines(Frame(regs[k], u, p), [word], M)
+                if res:
+                    rows = max(res, key=lambda rs: rs[0]["size"])
+                    got.append((rows[0]["size"], rows, th))
+            fits[k, word] = got
         return fits[k, word]
+
+    def reading_angle(th):
+        (ux, uy), _ = axis(th)
+        return math.atan2(uy, ux)
+
+    def best_pair(k1, w1, k2, w2):
+        """Both words' angles chosen together: their reading directions
+        may differ by ≤ SPLIT_TURN (HILL near-vertical beside a
+        near-horizontal SIDE was "alarming" — user)."""
+        top = None
+        for s1, r1, t1 in options(k1, w1):
+            for s2, r2, t2 in options(k2, w2):
+                turn = abs(math.remainder(reading_angle(t1) - reading_angle(t2),
+                                          math.tau))
+                if turn > math.radians(SPLIT_TURN):
+                    continue
+                key = min(s1, s2 * 1.0) + 0.01 * max(s1, s2)
+                if top is None or key > top[0]:
+                    top = (key, (r1, t1), (r2, t2))
+        return top[1:] if top else None
 
     out = []
     # adjacent pieces, either way round: pieces come in route order and a
@@ -1130,8 +1153,8 @@ def _splits(regs, cands, M, consecutive=False):
         words = [lines[0].rstrip("-"), lines[1]]
         pen = pen - (PENALTY["hyphen"] if hyph else 0) + PENALTY["split"]
         for order in pairs:
-            got = [best(k, w) for k, w in zip(order, words)]
-            if None in got:
+            got = best_pair(order[0], words[0], order[1], words[1])
+            if got is None:
                 continue
             (r1, th1), (r2, th2) = got
             # the second word reads after the first on the *page* — to its
