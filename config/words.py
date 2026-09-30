@@ -135,3 +135,8 @@ HERO_SPLITS = {"Hillside", "Porter Square",
 # layout bunches into the fat corner ("comical", user). Curves already
 # compete on score for every long, thin shape; this forces them.
 HERO_CURVES = set()
+
+# Labels whose letters swell with the shape (each letter its own uniform
+# size, from the room where it sits; neighbors ≤ 12% apart, word ≤ 1.5×).
+# Swell already competes on score for long, thin shapes; this forces it.
+HERO_SWELL = set()

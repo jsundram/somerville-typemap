@@ -35,6 +35,7 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 from config.words import (HERO_ABBREVIATIONS, HERO_CURVES, HERO_SPLITS,  # noqa: E402
+                          HERO_SWELL,
                           HERO_VARIANTS)
 from typemap.fills import _polygons  # noqa: E402
 
@@ -42,6 +43,7 @@ from typemap.fills import _polygons  # noqa: E402
 PENALTY = {"abbrev": 0.08, "hyphen": 0.12, "variant": 0.04,
            "split": 0.10,  # a label in two places reads less as one
            "curve": 0.06,  # a curved baseline reads a little slower
+           "swell": 0.04,  # letters of varying size read a little slower
            "tilt": 0.06}  # × |sin angle|: horizontal reads easiest
 MAX_LINES = 3
 LEADING = 0.30   # gap between stacked lines, as a fraction of cap height
@@ -57,6 +59,8 @@ OVERLAP = 0.4    # consecutive lines overlap along the baseline by ≥ this
                  # share of the shorter one
 SPLIT_RATIO = 2.2  # split words: bigger ≤ 2.2× smaller (user: PORTER/SQUARE)
 REFINE_TOP = 4   # layouts refined against real outlines
+SWELL_STEP = 0.12   # swell: neighboring letters differ by ≤ 12%
+SWELL_RATIO = 1.5   # swell: biggest letter ≤ 1.5× the smallest (envelope v6)
 CURVE_ELONGATION = 3.0  # only shapes ≥ this long/wide try curved baselines
 PRESENCE = 0.25  # score × span^this: spanning the shape's length matters a little
 MAX_RATIO = 2.0  # biggest line ≤ 2× the smallest — one label, not a headline
@@ -348,13 +352,18 @@ class Frame:
     def place(self, r, M):
         """[(ch, glyph, affine)] for the row's glyphs: font units → page."""
         (ux, uy), (px, py) = self.u, self.p
-        k = r["size"] / M.upm
+        sizes = _sizes(r)
+        vm = (r["v0"] + r["v1"]) / 2
         out, pen = [], r["t0"]
-        for ch in r["line"]:
+        for ch, sz in zip(r["line"], sizes):
             g = M.cmap.get(ord(ch))
             if g is None:
                 continue
-            ox, oy = self.xy(pen, r["v1"])  # baseline = bottom of cap band
+            k = sz / M.upm
+            # baseline: bottom of the cap band — for swell rows each letter
+            # is centered on the band's mid-line
+            v = r["v1"] if "sizes" not in r else vm + sz * M.cap / 2
+            ox, oy = self.xy(pen, v)
             out.append((ch, g, [ux * k, -px * k, uy * k, -py * k, ox, oy]))
             pen += M.gs[g].width * k
         return out
@@ -529,11 +538,18 @@ def _suffix_cap(rows):
                 _scale_row(r, math.sqrt(min(names) / ink))
 
 
+def _sizes(r):
+    """Per-letter sizes: a swell row carries its own, others are uniform."""
+    return r["sizes"] if "sizes" in r else [r["size"]] * len(r["line"])
+
+
 def _scale_row(r, f):
     """Scale a row's size and box by `f` about the box center."""
     mid, vm = (r["t0"] + r["t1"]) / 2, (r["v0"] + r["v1"]) / 2
     hw, hh = (r["t1"] - r["t0"]) / 2 * f, (r["v1"] - r["v0"]) / 2 * f
     r["size"] *= f
+    if "sizes" in r:
+        r["sizes"] = [x * f for x in r["sizes"]]
     r["t0"], r["t1"], r["v0"], r["v1"] = mid - hw, mid + hw, vm - hh, vm + hh
 
 
@@ -549,7 +565,7 @@ def _shift_row(r, dt, dv):
 def outline(r, M):
     """The row's real glyph outlines on the page."""
     fr = r["frame"]
-    if isinstance(fr, SpineFrame):
+    if isinstance(fr, SpineFrame) or "sizes" in r:
         return unary_union([affine_transform(M.line_poly(ch), m)
                             for ch, _, m in fr.place(r, M) if ch != " "])
     (ux, uy), (px, py) = fr.u, fr.p
@@ -598,7 +614,8 @@ def refine(rows, M, ratio):
     def ok(i, r):
         if not bands_apart(i, r):
             return False, None
-        if isinstance(r["frame"], SpineFrame) and not _letters_apart(r, M):
+        if ((isinstance(r["frame"], SpineFrame) or "sizes" in r)
+                and not _letters_apart(r, M)):
             return False, None
         shp = outline(r, M)
         return (shp.within(r["frame"].poly) and clear(i, shp)), shp
@@ -818,14 +835,14 @@ class SpineFrame:
         """Glyphs along the band's baseline (v1), each rotated to the local
         direction across its own width; spacing is measured along the
         baseline itself, so bends neither stretch nor squash the word."""
-        k = r["size"] / M.upm
         vm = (r["v0"] + r["v1"]) / 2  # letters are spaced along mid-height
-        half = (r["v1"] - r["v0"]) / 2
         out, t = [], r["t0"]
-        for ch in r["line"]:
+        for ch, sz in zip(r["line"], _sizes(r)):
             g = M.cmap.get(ord(ch))
             if g is None:
                 continue
+            k = sz / M.upm
+            half = sz * M.cap / 2
             w = M.gs[g].width * k
             a = self.xy(t, vm)
             dt = w  # advance t until the mid-line has covered w
@@ -875,10 +892,109 @@ def _elongation(poly):
     return L / max(poly.area / L, 1e-6)
 
 
+# --- swell: per-letter sizes ------------------------------------------------------
+
+def fit_swell(frame, line, M):
+    """One line whose letters each take their own (uniform) size from the
+    clearance where they sit — growing into the wide parts of a shape,
+    shrinking at the narrow ones, never distorted. Neighbors differ by
+    ≤ SWELL_STEP, the word by ≤ SWELL_RATIO; letters are centered on the
+    line so the word swells evenly on both sides. Returns a row or None."""
+    np = frame.np
+    res, free = frame.res, frame.free
+    nv, nt = free.shape
+    if not hasattr(frame, "free_up"):
+        inside = free > 0
+        up = np.zeros_like(free)
+        up[0] = inside[0]
+        for r in range(1, nv):
+            up[r] = (up[r - 1] + 1) * inside[r]
+        frame.free_up = up
+    widths = []
+    for ch in line:
+        g = M.cmap.get(ord(ch))
+        widths.append(M.gs[g].width / M.upm if g is not None else 0.0)
+    radius = getattr(frame, "radius_col", None)
+    # candidate center rows: the ones with the most room overall
+    half_all = (np.minimum(frame.free_up, free) - 0.5) * res
+    if radius is not None:
+        half_all = np.minimum(half_all, radius[None, :]
+                              / (2 * SpineFrame.RADIUS_CAPS))
+    rows_by_room = np.argsort(-np.clip(half_all, 0, None).sum(axis=1))[:10]
+    best = None
+    for rc in rows_by_room:
+        h = np.clip(half_all[rc], 0, None)  # half-height free per column
+        if h.max() * 2 / M.cap < MIN_SIZE:
+            continue
+        cols = np.flatnonzero(h * 2 / M.cap >= MIN_SIZE)
+        for c0 in cols[::max(1, len(cols) // 40)]:
+            sizes = _swell_sizes(h, c0, widths, res, M)
+            if sizes is None:
+                continue
+            ink = sum(sz * sz * w for sz, w in zip(sizes, widths))
+            key = min(sizes) * math.sqrt(ink)
+            if best is None or key > best[0]:
+                best = (key, rc, c0, sizes)
+    if best is None:
+        return None
+    _, rc, c0, sizes = best
+    vmid = frame.vmin + (rc + 0.5) * res
+    top = max(sizes) * M.cap / 2
+    t0 = frame.tmin + c0 * res
+    return {"line": line, "size": min(sizes), "sizes": sizes,
+            "t0": t0, "t1": t0 + sum(sz * w for sz, w in zip(sizes, widths)),
+            "v0": vmid - top, "v1": vmid + top, "frame": frame}
+
+
+def _swell_sizes(h, c0, widths, res, M):
+    """Letter sizes laid left→right from column c0 over the half-height
+    profile h; smoothed both ways; None if the word doesn't fit."""
+    nt = len(h)
+    sizes = [MAX_SIZE] * len(widths)
+    for _ in range(4):
+        pos, prev, new = c0 * res, None, []
+        for i, w in enumerate(widths):
+            ub = sizes[i]
+            if prev is not None:
+                ub = min(ub, prev * (1 + SWELL_STEP))
+            sz = ub
+            for _ in range(8):  # size ↔ span fixed point (span grows with size)
+                a = int(pos / res)
+                b = int((pos + sz * w) / res) + 1
+                if b > nt:
+                    sz *= 0.85
+                    continue
+                room = 2 * h[a:b].min() / M.cap if b > a else sz
+                if room >= sz * 0.995:
+                    break
+                sz = room
+            if sz < MIN_SIZE or int((pos + sz * w) / res) + 1 > nt:
+                return None
+            new.append(sz)
+            pos += sz * w
+            prev = sz
+        # backward smoothing and the word-level ratio
+        for i in range(len(new) - 2, -1, -1):
+            new[i] = min(new[i], new[i + 1] * (1 + SWELL_STEP))
+        lo = min(new)
+        new = [min(x, lo * SWELL_RATIO) for x in new]
+        if all(abs(a - b) < 0.5 for a, b in zip(new, sizes)):
+            return new
+        sizes = new
+    return sizes
+
+
 # --- search ----------------------------------------------------------------------
 
+def _ink(r, M):
+    if "sizes" in r:
+        return sum(sz * sz * M.cap * M.advance(ch)
+                   for ch, sz in zip(r["line"], r["sizes"]))
+    return (r["t1"] - r["t0"]) * (r["v1"] - r["v0"])
+
+
 def _score(rows, pen, th, M, shape=None):
-    ink = sum((r["t1"] - r["t0"]) * (r["v1"] - r["v0"]) for r in rows)
+    ink = sum(_ink(r, M) for r in rows)
     floor = min(r["size"] for r in rows)
     sc = (math.sqrt(floor * math.sqrt(ink / M.cap)) * (1 - pen)
           * (1 - PENALTY["tilt"] * abs(math.sin(th))))
@@ -983,6 +1099,32 @@ def search(polygon, name, M):
     if regs:
         scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
                    for x in _splits(regs, cands, M)]
+    # swell: single lines with per-letter sizes, on the main straight axes
+    # and (for long shapes) the spines
+    swell_forced = name in HERO_SWELL
+    if swell_forced or _elongation(inner) >= CURVE_ELONGATION:
+        sw = []
+        for th in angles(inner)[-4:]:  # min-rect axis + longest edges
+            u, p = axis(th)
+            sw.append((Frame(inner, u, p), th))
+        for sp in spines(inner):
+            for rev in (False, True):
+                f_ = SpineFrame(inner, sp, reverse=rev)
+                sw.append((f_, f_.angle))
+        for frame, th in sw:
+            for lines, pen in cands:
+                if len(lines) != 1:
+                    continue
+                row = fit_swell(frame, lines[0], M)
+                if row is None:
+                    continue
+                if isinstance(frame, SpineFrame) and not frame.reads_forward([row]):
+                    continue
+                pen_s = pen + PENALTY["swell"] + (
+                    PENALTY["curve"] if isinstance(frame, SpineFrame) else 0)
+                entry = (_score([row], pen_s, th, M, inner), [row], lines,
+                         pen_s, th, MAX_RATIO)
+                scored.append(entry)
     forced = name in HERO_CURVES
     if forced or _elongation(inner) >= CURVE_ELONGATION:
         if forced:
@@ -998,6 +1140,8 @@ def search(polygon, name, M):
                                                   inner),
                                            rows, lines, pen_c, frame.angle,
                                            MAX_RATIO))
+    if swell_forced:  # swell only (config HERO_SWELL)
+        scored = [x for x in scored if "sizes" in x[1][0]]
     if not scored:
         return None
     scored.sort(key=lambda x: -x[0])

@@ -6,9 +6,11 @@
 
     uv run experiments/warp/curve_compare.py      # → compare/curves.svg
 
-Top row: the layout search forced onto curved baselines (config
-HERO_CURVES), the chosen spine in red. Bottom row: the same search with
-curves switched off. Each cell notes the label and its line sizes.
+Row 1: the layout search forced onto curved baselines (config
+HERO_CURVES), the chosen spine in red. Row 2: forced swell — per-letter
+sizes (config HERO_SWELL), on a spine or a straight axis. Row 3: the
+same search with curves and swell off. Each cell notes the label and its
+line sizes (swell: smallest–largest letter).
 """
 
 import json
@@ -43,14 +45,19 @@ def cell_poly(name, col, row, feats):
 def main():
     feats = {f["name"]: f for f in json.loads((HERE / "shapes.json").read_text())["features"]}
     M = hl.Metrics.load(RS.FONT_PATH)
-    doc = SvgDoc(len(NAMES) * CELL, 2 * CELL, background="#ffffff")
-    saved = set(hl.HERO_CURVES), hl.CURVE_ELONGATION
-    for row, mode in enumerate(("curved", "straight")):
+    modes = ("curved", "swell", "straight")
+    doc = SvgDoc(len(NAMES) * CELL, len(modes) * CELL, background="#ffffff")
+    saved = set(hl.HERO_CURVES), set(hl.HERO_SWELL), hl.CURVE_ELONGATION
+    for row, mode in enumerate(modes):
         hl.HERO_CURVES.clear()
+        hl.HERO_SWELL.clear()
+        hl.CURVE_ELONGATION = saved[2]
         if mode == "curved":
             hl.HERO_CURVES.update(NAMES)
+        elif mode == "swell":
+            hl.HERO_SWELL.update(NAMES)
         else:
-            hl.CURVE_ELONGATION = float("inf")  # curves off
+            hl.CURVE_ELONGATION = float("inf")  # curves + swell off
         for col, name in enumerate(NAMES):
             poly = cell_poly(name, col, row, feats)
             doc.raw(f'<path d="{" ".join(polygon_ds(poly))}" fill="none" '
@@ -69,13 +76,17 @@ def main():
                                 f"{x:.1f},{y:.1f}" for x, y in part.coords)
                                 + '" fill="none" stroke="#e33" stroke-width="1.5"/>')
                 hl.render(doc, res, M, "#333")
-                note = (" / ".join(res["lines"]) + "  ·  "
-                        + ", ".join(str(round(r["size"])) for r in res["rows"]))
+                note = (" / ".join(res["lines"]) + "  ·  " + ", ".join(
+                    f"{round(min(r['sizes']))}–{round(max(r['sizes']))}"
+                    if "sizes" in r else str(round(r["size"]))
+                    for r in res["rows"]))
             doc.raw(f'<text x="{col * CELL + 8}" y="{row * CELL + 16}" font-size="12" '
                     f'font-family="monospace" fill="#999">{name} — {mode}: {note}</text>')
-        hl.HERO_CURVES.clear()
-        hl.HERO_CURVES.update(saved[0])
-        hl.CURVE_ELONGATION = saved[1]
+    hl.HERO_CURVES.clear()
+    hl.HERO_CURVES.update(saved[0])
+    hl.HERO_SWELL.clear()
+    hl.HERO_SWELL.update(saved[1])
+    hl.CURVE_ELONGATION = saved[2]
     out = HERE / "compare/curves.svg"
     out.parent.mkdir(exist_ok=True)
     doc.write(out)
