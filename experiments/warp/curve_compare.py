@@ -42,8 +42,8 @@ MODES = [
     ("construction", "SPINE", "how the curved\nbaseline is built", None),
     ("curved", "CURVED", "one line along\nthe smoothed spine", "curves"),
     ("swell", "SWELL", "letter sizes follow\nthe room (≤12% steps)", "swell"),
-    ("bends", "BENDS ≤45°", "words split at sharp\nbends, ≤45° apart", "bends45"),
-    ("bends30", "BENDS ≤30°", "same, words ≤30° apart\n(more continuous)", "bends30"),
+    ("bends", "BENDS", "words split at sharp\nbends, straight words", "bends"),
+    ("combined", "COMBINED", "bends + each word\ncurved and/or swelling", "combined"),
     ("straight", "STRAIGHT", "straight baselines\nonly (the default)", "straight"),
 ]
 
@@ -169,14 +169,14 @@ def force(mode):
     hl.HERO_SWELL.clear()
     hl.HERO_BENDS.clear()
     hl.CURVE_ELONGATION = _SAVED["elong"]
-    hl.SPLIT_TURN = _SAVED["turn"]
+    hl.SPLIT_FRAMES = _SAVED["frames"]
     if mode == "curves":
         hl.HERO_CURVES.update(NAMES)
     elif mode == "swell":
         hl.HERO_SWELL.update(NAMES)
-    elif mode in ("bends45", "bends30"):
+    elif mode in ("bends", "combined"):
         hl.HERO_BENDS.update(NAMES)
-        hl.SPLIT_TURN = 30.0 if mode == "bends30" else 45.0
+        hl.SPLIT_FRAMES = "all" if mode == "combined" else "straight"
     elif mode == "straight":
         hl.CURVE_ELONGATION = float("inf")  # curves, swell, bends off
 
@@ -185,7 +185,7 @@ def main():
     feats = {f["name"]: f for f in json.loads((HERE / "shapes.json").read_text())["features"]}
     M = hl.Metrics.load(RS.FONT_PATH)
     _SAVED.update(curves=set(hl.HERO_CURVES), swell=set(hl.HERO_SWELL),
-                  elong=hl.CURVE_ELONGATION, turn=hl.SPLIT_TURN)
+                  elong=hl.CURVE_ELONGATION, frames=hl.SPLIT_FRAMES)
     doc = SvgDoc(GUTTER + len(NAMES) * CELL, len(MODES) * (CELL + HEAD),
                  background="#ffffff")
     # pass 1: search every cell (so the best per shape is known)
