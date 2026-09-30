@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape, quoteattr
 # Average glyph advance as a fraction of font size, for a typical sans.
 # Only used to decide how many repetitions to emit; overflow past a path
 # end or a clip edge is dropped/clipped, so precision is not critical.
-CHAR_WIDTH = 0.6
+CHAR_WIDTH = 0.44  # Barlow Condensed ≈ 0.36–0.40 em/char + letter-spacing slack
 
 
 def est_width(text: str, font_size: float) -> float:
@@ -92,7 +92,7 @@ class SvgDoc:
             f'width="{self.width}" height="{self.height}" '
             f'viewBox="0 0 {self.width} {self.height}">\n'
             + bg
-            + f"<defs>{''.join(self._defs)}</defs>\n"
+            + f"<defs>{_font_style()}{''.join(self._defs)}</defs>\n"
             + "\n".join(self._body)
             + "\n</svg>\n"
         )
@@ -102,6 +102,40 @@ class SvgDoc:
             f.write(self.tostring())
 
 
+_FONT_CSS = ""
+
+
+def embed_fonts(family: str, files: dict, root) -> None:
+    """Embed subset font files (weight → path) as @font-face data URIs in
+    every SVG written afterwards — SVGs shown via <img> can't fetch fonts,
+    and the print must not depend on what's installed."""
+    import base64
+    import io
+
+    from fontTools import subset
+    from fontTools.ttLib import TTFont
+
+    global _FONT_CSS
+    text = ("".join(chr(c) for c in range(0x20, 0x7F))
+            + "·»«–—’‘“”•…°éèáàüöñç")
+    faces = []
+    for weight, path in sorted(files.items()):
+        font = TTFont(str(root / path))
+        sub = subset.Subsetter(subset.Options())
+        sub.populate(text=text)
+        sub.subset(font)
+        buf = io.BytesIO()
+        font.save(buf)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        faces.append(f"@font-face{{font-family:'{family}';font-weight:{weight};"
+                     f"src:url(data:font/ttf;base64,{b64}) format('truetype')}}")
+    _FONT_CSS = "".join(faces)
+
+
+def _font_style() -> str:
+    return f"<style>{_FONT_CSS}</style>" if _FONT_CSS else ""
+
+
 def write_combined(path, docs: list[SvgDoc], width: float, height: float,
                    background: str = "#faf7f0"):
     """Merge several layer docs (distinct id_prefixes!) into one SVG."""
@@ -109,7 +143,8 @@ def write_combined(path, docs: list[SvgDoc], width: float, height: float,
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">',
         f'<rect width="100%" height="100%" fill="{background}"/>',
-        "<defs>" + "".join(d for doc in docs for d in doc._defs) + "</defs>",
+        "<defs>" + _font_style() + "".join(d for doc in docs for d in doc._defs)
+        + "</defs>",
     ]
     parts += [f'<g id="{doc.id_prefix or i}">' + "\n".join(doc._body) + "</g>"
               for i, doc in enumerate(docs)]

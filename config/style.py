@@ -5,8 +5,18 @@ Font stacks fall back gracefully in a browser; swap in licensed print
 fonts before publishing (see README licensing note).
 """
 
-BODY_FONT = "Avenir Next, Helvetica Neue, Arial, sans-serif"
-HERO_FONT = "Arial Rounded MT Bold, Cooper Black, Chalkboard SE, sans-serif"
+# One family for every label (user, 2026-09-30): Barlow Condensed, OFL,
+# vendored in fonts/ and embedded (subset) into each SVG so the map looks
+# the same everywhere. Heroes use glyph outlines from HERO_FONT_FILE.
+BODY_FONT = "Barlow Condensed, Avenir Next Condensed, Arial Narrow, sans-serif"
+HERO_FONT = BODY_FONT
+EMBED_FONTS = {  # font-weight → file
+    500: "fonts/BarlowCondensed-Medium.ttf",
+    600: "fonts/BarlowCondensed-SemiBold.ttf",
+    700: "fonts/BarlowCondensed-Bold.ttf",
+    800: "fonts/BarlowCondensed-ExtraBold.ttf",
+    900: "fonts/BarlowCondensed-Black.ttf",
+}
 
 PAPER = "#faf7f0"
 

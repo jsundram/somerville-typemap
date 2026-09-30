@@ -115,7 +115,7 @@ def street_label(doc: SvgDoc, line, name: str, style: dict, sep: str = " · ") -
     doc.text_on_path(path_d(coords), text, style)
 
 
-PER_CHAR_HERO = 0.72  # rounded-bold caps run wider than the body estimate
+PER_CHAR_HERO = 0.50  # Barlow Condensed ExtraBold caps ≈ 0.45 em + spacing
 
 
 def _partitions(words: list[str], n: int):

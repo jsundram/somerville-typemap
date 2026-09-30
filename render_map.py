@@ -23,7 +23,8 @@ from shapely import STRtree
 from shapely.geometry import LineString, MultiLineString, Point, shape
 from shapely.ops import linemerge, substring, transform, unary_union
 
-from config.style import (HERO_COLORS, HERO_CYCLE, HERO_FONT_FILE,
+from config.style import (BODY_FONT, EMBED_FONTS, HERO_COLORS, HERO_CYCLE,
+                          HERO_FONT_FILE,
                           HERO_NEUTRALS, HERO_TRANSIT, LAYERS, LINE_SHADES,
                           PAPER)
 from config.words import (LINE_COLORS, PATH_FAMILY, PERCEIVED_BORDERS,
@@ -35,7 +36,7 @@ from typemap.fills import (arched_label, contour_fill, fitted_hero,
                            linepack_fill, polygon_ds, street_label)
 from typemap import hero_layout
 from typemap.osm import load_layers, _relation_polygon
-from typemap.svgdoc import (SvgDoc, est_width, path_d, repeat_to_length,
+from typemap.svgdoc import (SvgDoc, embed_fonts, est_width, path_d, repeat_to_length,
                             write_combined)
 
 ROOT = Path(__file__).parent
@@ -74,6 +75,7 @@ def color_regions(regions, palette, fixed=()):
 
 
 def main():
+    embed_fonts(BODY_FONT.split(",")[0].strip(), EMBED_FONTS, ROOT)
     hoods = [
         (f["properties"]["name"], shape(f["geometry"]))
         for f in json.loads((ROOT / "data/neighborhoods.geojson").read_text())["features"]
