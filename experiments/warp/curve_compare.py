@@ -6,6 +6,10 @@
 
     uv run experiments/warp/curve_compare.py      # → compare/curves.svg
 
+Row 0: how the spine is built — Voronoi cells of boundary samples
+(gray), the skeleton = Voronoi edges inside the shape (tan), the longest
+route through it (blue), the route smoothed at ±24/60/120 px (red,
+light→dark), straight extensions past both ends (green, dashed).
 Row 1: the layout search forced onto curved baselines (config
 HERO_CURVES), the chosen spine in red. Row 2: forced swell — per-letter
 sizes (config HERO_SWELL), on a spine or a straight axis. Row 3: the
@@ -14,11 +18,12 @@ line sizes (swell: smallest–largest letter).
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 
 from shapely.affinity import scale as ascale, translate
-from shapely.geometry import LineString, shape
+from shapely.geometry import LineString, box as shapely_box, shape
 
 HERE = Path(__file__).parent
 ROOT = HERE.parents[1]
@@ -42,10 +47,71 @@ def cell_poly(name, col, row, feats):
                      col * CELL + PAD - minx, row * CELL + PAD - miny)
 
 
+def _path(pts, style):
+    return ('<path d="M ' + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+            + f'" fill="none" {style}/>')
+
+
+def construction(doc, poly, name, col, row):
+    """Draw each stage of hero_layout.centerline for this shape."""
+    from shapely.geometry import MultiPoint
+    from shapely.ops import voronoi_diagram
+
+    inner = poly.buffer(-hl.MARGIN)
+    stages = {}
+    hl.centerline(inner, debug=stages)
+    clip = poly.buffer(2)
+    cells = voronoi_diagram(MultiPoint(stages["samples"]))
+    for cell in cells.geoms:
+        c = cell.intersection(clip)
+        for part in getattr(c, "geoms", [c]):
+            if part.geom_type == "Polygon" and not part.is_empty:
+                doc.raw(_path(list(part.exterior.coords),
+                              'stroke="#c9c9c9" stroke-width="0.7"'))
+    doc.raw(f'<path d="{" ".join(polygon_ds(poly))}" fill="none" '
+            f'stroke="#888" stroke-width="4"/>')
+    for x, y in stages["samples"]:
+        doc.raw(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.6" fill="#999"/>')
+    for e in stages["skeleton"]:
+        doc.raw(_path(e, 'stroke="#d9a441" stroke-width="1.2"'))
+    doc.raw(_path(stages["route"], 'stroke="#2f6aa8" stroke-width="3"'))
+    for sm, color in ((24, "#f4a09a"), (60, "#e5534b"), (120, "#a61b12")):
+        st = {}
+        hl.centerline(inner, smooth=sm, debug=st)
+        doc.raw(_path(st["smoothed"], f'stroke="{color}" stroke-width="2"'))
+        ext = st["extended"]
+        sm_pts = st["smoothed"]
+        # the extensions: each extended end back to its smoothed end
+        box = shapely_box(col * CELL + 4, row * CELL + 22,
+                          (col + 1) * CELL - 4, (row + 1) * CELL - 4)
+        for tip in (ext[0], ext[-1]):
+            near = min((sm_pts[0], sm_pts[-1]), key=lambda q: math.dist(q, tip))
+            seg = LineString([near, tip]).intersection(box)  # stay in the cell
+            if not seg.is_empty:
+                doc.raw(_path(list(seg.coords), 'stroke="#2f8f4e" stroke-width="1.5" '
+                                                'stroke-dasharray="6 4"'))
+    doc.raw(f'<text x="{col * CELL + 8}" y="{row * CELL + 16}" font-size="12" '
+            f'font-family="monospace" fill="#999">{name} — construction</text>')
+    if col == 0:  # legend, in North Point's empty lower half
+        items = [("#c9c9c9", "Voronoi cells of 240 boundary samples"),
+                 ("#d9a441", "skeleton: Voronoi edges inside the shape"),
+                 ("#2f6aa8", "longest route through the skeleton"),
+                 ("#f4a09a", "smoothed ±24 px"), ("#e5534b", "smoothed ±60 px"),
+                 ("#a61b12", "smoothed ±120 px"),
+                 ("#2f8f4e", "extensions (30% of length, straight)")]
+        for i, (color, label) in enumerate(items):
+            y = row * CELL + 300 + i * 24
+            dash = ' stroke-dasharray="6 4"' if "extensions" in label else ""
+            doc.raw(f'<line x1="{col * CELL + 30}" y1="{y}" x2="{col * CELL + 70}" '
+                    f'y2="{y}" stroke="{color}" stroke-width="3"{dash}/>')
+            doc.raw(f'<text x="{col * CELL + 80}" y="{y + 5}" font-size="14" '
+                    f'font-family="monospace" fill="#555">{label}</text>')
+
+
 def main():
     feats = {f["name"]: f for f in json.loads((HERE / "shapes.json").read_text())["features"]}
     M = hl.Metrics.load(RS.FONT_PATH)
-    modes = ("curved", "swell", "straight")
+    modes = ("construction", "curved", "swell", "straight")
     doc = SvgDoc(len(NAMES) * CELL, len(modes) * CELL, background="#ffffff")
     saved = set(hl.HERO_CURVES), set(hl.HERO_SWELL), hl.CURVE_ELONGATION
     for row, mode in enumerate(modes):
@@ -60,6 +126,9 @@ def main():
             hl.CURVE_ELONGATION = float("inf")  # curves + swell off
         for col, name in enumerate(NAMES):
             poly = cell_poly(name, col, row, feats)
+            if mode == "construction":
+                construction(doc, poly, name, col, row)
+                continue
             doc.raw(f'<path d="{" ".join(polygon_ds(poly))}" fill="none" '
                     f'stroke="#888" stroke-width="4"/>')
             res = hl.search(poly, name, M)

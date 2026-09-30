@@ -666,13 +666,15 @@ def refine(rows, M, ratio):
 
 # --- curved baselines (phase 6) ------------------------------------------------
 
-def centerline(poly, step=2.0, smooth=24.0, extend=0.3):
+def centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None):
     """The shape's spine: the longest path through the medial axis
     (Voronoi edges of boundary samples that lie inside), smoothed with a
     ±`smooth` px moving average, extended straight past both ends by
     `extend` × its length (the raster decides what's inside), evenly
     resampled every `step` px, oriented to read left→right (bottom→top
-    when vertical). Returns [(x, y)] or None."""
+    when vertical). Returns [(x, y)] or None. Pass a dict as `debug` to
+    get the construction stages (samples, skeleton, route, smoothed,
+    extended) for diagrams."""
     import heapq
 
     from shapely.geometry import LineString, MultiPoint
@@ -684,6 +686,9 @@ def centerline(poly, step=2.0, smooth=24.0, extend=0.3):
     vor = voronoi_diagram(pts, edges=True)  # a collection of multilines
     edges = [e for g in vor.geoms for e in getattr(g, "geoms", [g])
              if e.within(poly)]
+    if debug is not None:
+        debug["samples"] = [(q.x, q.y) for q in pts.geoms]
+        debug["skeleton"] = [list(e.coords) for e in edges]
     if not edges:
         return None
     adj = {}
@@ -712,6 +717,8 @@ def centerline(poly, step=2.0, smooth=24.0, extend=0.3):
         path.append(prev[path[-1]])
     if len(path) < 3:
         return None
+    if debug is not None:
+        debug["route"] = list(path)
 
     def resample(cs):
         ln = LineString(cs)
@@ -728,6 +735,8 @@ def centerline(poly, step=2.0, smooth=24.0, extend=0.3):
                   / len(pts[max(0, i - q):i + q + 1]) for d in (0, 1))
             for i in range(1, len(pts) - 1)] + [pts[-1]]
     pts = resample(pts)
+    if debug is not None:
+        debug["smoothed"] = list(pts)
     L = step * (len(pts) - 1)
     m = max(2, int(0.1 * len(pts)))  # end tangents over the last 10%
     (x0, y0), (x1, y1) = pts[0], pts[m]
@@ -737,6 +746,8 @@ def centerline(poly, step=2.0, smooth=24.0, extend=0.3):
     pts = ([(x0 - (x1 - x0) / d0 * e, y0 - (y1 - y0) / d0 * e)] + pts
            + [(x3 + (x3 - x2) / d1 * e, y3 + (y3 - y2) / d1 * e)])
     pts = resample(pts)
+    if debug is not None:
+        debug["extended"] = list(pts)
     dx, dy = pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]
     if dx < -1e-6 or (abs(dx) <= 1e-6 and dy > 0):
         pts = pts[::-1]
