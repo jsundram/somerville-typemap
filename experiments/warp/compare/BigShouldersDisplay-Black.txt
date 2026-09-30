@@ -1,0 +1,24 @@
+algorithm: search (BigShouldersDisplay-Black)
+neighborhood            coverage   spill  cap px  label
+Assembly Square           30.2%   0.0%    65.9  ASSEMBLY / SQUARE
+Ball Square               31.4%   0.0%   122.9  BALL / SQ
+Boynton Yards             23.1%   0.0%    60.8  BOYNTON / YARDS
+Brickbottom               25.7%   0.0%    73.4  BRICKBOTTOM
+Davis Square              27.5%   0.0%   108.0  DAVIS / SQ
+Duck Village              31.3%   0.0%    84.8  DUCK / VILLAGE
+East Somerville           29.2%   0.0%    75.1  EAST / SOMER- / VILLE
+Hillside                  17.0%   0.0%    62.1  HILLSIDE
+Inner Belt                35.9%   0.0%   103.4  INNER / BELT
+Magoun Square             33.6%   0.0%    86.8  MAGOUN / SQUARE
+North Point               13.0%   0.0%    34.3  NORTH / PT
+Porter Square             19.3%   0.0%    53.9  PORTER SQ
+Powder House Square       36.7%   0.0%    91.9  POWDER / HOUSE SQ
+Spring Hill               34.6%   0.0%   105.9  SPRING / HILL
+Teele Square              28.3%   0.0%   111.2  TEELE / SQ
+Ten Hills                 30.3%   0.0%   108.8  10 / HILLS
+Twin City                 22.9%   0.0%    77.5  TWIN CITY
+Union Square              31.6%   0.0%    97.2  UNION / SQUARE
+Winter Hill               40.3%   0.0%    86.4  WINTER / HILL
+----------------------------------------
+median                    30.2%   0.0%    86.4
+worst                     13.0%   0.0%    34.3

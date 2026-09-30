@@ -13,6 +13,7 @@ transforms + polygon coords, for measure.py).
 
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -38,7 +39,9 @@ HERO_STYLE = {
     "font_size": 40,  # overwritten by the algorithm
 }
 
-FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf"
+# the hero face: WARP_FONT=<path> overrides (phase 4 typeface comparison)
+FONT_PATH = os.environ.get(
+    "WARP_FONT", "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf")
 
 # taste rule: names that may break mid-word into close separate words
 SPLITS = {"HILLSIDE": "HILL SIDE"}
@@ -696,7 +699,8 @@ def main():
 
     doc.write(HERE / "sheet.svg")
     (HERE / "sheet_layout.json").write_text(json.dumps(
-        {"algorithm": algo_name, "cell": CELL, "cols": COLS, "cells": layout}))
+        {"algorithm": f"{algo_name} ({Path(FONT_PATH).stem})", "cell": CELL,
+         "cols": COLS, "cells": layout}))
     print(f"wrote {HERE / 'sheet.svg'} ({algo_name}, {len(feats)} cells)")
 
 
