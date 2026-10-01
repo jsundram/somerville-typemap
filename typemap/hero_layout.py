@@ -43,7 +43,7 @@ from typemap.fills import _polygons  # noqa: E402
 PENALTY = {"abbrev": 0.08, "hyphen": 0.12, "variant": 0.04,
            "split": 0.10,  # a label in two places reads less as one
            "curve": 0.06,  # a curved baseline reads a little slower
-           "swell": 0.04,  # letters of varying size read a little slower
+           "swell": 0.01,  # varying sizes read a hair slower (swell-maxing pass: was 0.04)
            "tilt": 0.06}  # × |sin angle|: horizontal reads easiest
 MAX_LINES = 3
 LEADING = 0.30   # gap between stacked lines, as a fraction of cap height
@@ -68,7 +68,7 @@ LEGIBILITY_FLOOR = 0.4
 SPLIT_FRAMES = "all"
 SPLIT_TURN = 45.0  # split words' reading directions differ by ≤ this (°)
 SPLIT_RATIO = 2.2  # split words: bigger ≤ 2.2× smaller (user: PORTER/SQUARE)
-REFINE_TOP = 4   # layouts refined against real outlines
+REFINE_TOP = 6   # layouts refined against real outlines (+ their swells)
 SWELL_STEP = 0.12   # swell: neighboring letters differ by ≤ 12%
 SWELL_RATIO = 1.5   # swell: biggest letter ≤ 1.5× the smallest (envelope v6)
 CURVE_ELONGATION = 3.0  # only shapes ≥ this long/wide try curved baselines
@@ -370,9 +370,9 @@ class Frame:
             if g is None:
                 continue
             k = sz / M.upm
-            # baseline: bottom of the cap band — for swell rows each letter
-            # is centered on the band's mid-line
-            v = r["v1"] if "sizes" not in r else vm + sz * M.cap / 2
+            # baseline: bottom of the cap band — swell rows place each
+            # letter by its anchor
+            v = r["v1"] if "sizes" not in r else _vcenter(r, sz, M) + sz * M.cap / 2
             ox, oy = self.xy(pen, v)
             out.append((ch, g, [ux * k, -px * k, uy * k, -py * k, ox, oy]))
             pen += M.gs[g].width * k
@@ -548,6 +548,30 @@ def _suffix_cap(rows):
                 _scale_row(r, math.sqrt(min(names) / ink))
 
 
+def _vcenter(r, sz, M):
+    """Vertical center of a letter of size sz in row r: swell rows anchor
+    their letters — a top line grows up from its baseline ("bottom"), a
+    bottom line down from its cap line ("top"), others stay centered."""
+    a = r.get("anchor", "center")
+    if a == "bottom":
+        return r["v1"] - sz * M.cap / 2
+    if a == "top":
+        return r["v0"] + sz * M.cap / 2
+    return (r["v0"] + r["v1"]) / 2
+
+
+def _ensure_up(frame):
+    """free_up[r, j]: consecutive inside cells from r going up."""
+    if not hasattr(frame, "free_up"):
+        np = frame.np
+        inside = frame.free > 0
+        up = np.zeros_like(frame.free)
+        up[0] = inside[0]
+        for r in range(1, inside.shape[0]):
+            up[r] = (up[r - 1] + 1) * inside[r]
+        frame.free_up = up
+
+
 def _sizes(r):
     """Per-letter sizes: a swell row carries its own, others are uniform."""
     return r["sizes"] if "sizes" in r else [r["size"]] * len(r["line"])
@@ -633,8 +657,7 @@ def refine(rows, M, ratio):
     def attempt(i, f):
         r0 = rows[i]
         d = 0.04 * r0["size"]
-        for dt, dv in ((0, 0), (d, 0), (-d, 0), (0, d), (0, -d),
-                       (2 * d, 0), (-2 * d, 0), (0, 2 * d), (0, -2 * d)):
+        for dt, dv in ((0, 0), (d, 0), (-d, 0), (0, d), (0, -d)):
             r = dict(r0)
             _scale_row(r, f)
             _shift_row(r, dt, dv)
@@ -662,9 +685,9 @@ def refine(rows, M, ratio):
             others = [r["size"] for j, r in enumerate(rows) if j != i]
             limit = min([MAX_SIZE, getattr(rows[i]["frame"], "max_cap", math.inf)
                          / M.cap] + [ratio * s for s in others])
-            if rows[i]["size"] * 1.03 > limit:
+            if rows[i]["size"] * 1.04 > limit:
                 continue
-            if attempt(i, 1.03):
+            if attempt(i, 1.04):
                 grew = True
     before = [r["size"] for r in rows]
     _suffix_cap(rows)
@@ -676,44 +699,72 @@ def refine(rows, M, ratio):
 
 # --- curved baselines (phase 6) ------------------------------------------------
 
+TRACE = None  # set to a list to record every finalist (diagnostics)
+
+# per-search memo (cleared by search()): the same polygon's spines and
+# frames were rebuilt for every word and mode — 11 s of a 22 s profile
+_MEMO = {}
+
+
+def _memo(key, make, *keep):
+    """Memoize for the current search. Keys use id(shape), so the shapes
+    are kept alive here too — a freed temporary's id can be reused by a
+    new shape and silently hit a stale entry (Brickbottom flip-flopped
+    between runs before this)."""
+    if key not in _MEMO:
+        _MEMO[key] = make()
+        _MEMO.setdefault("_keep", []).extend(keep)
+    return _MEMO[key]
+
+
+def frame_at(poly, th):
+    """Frame for `poly` at angle th, built once per search."""
+    return _memo(("frame", id(poly), round(th, 6)), lambda: Frame(poly, *axis(th)), poly)
+
+
+def spine_frame(poly, i, sp, rev):
+    return _memo(("spineframe", id(poly), i, rev),
+                 lambda: SpineFrame(poly, sp, reverse=rev), poly)
+
+
 def centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None,
                route="longest"):
-    """The shape's spine: the longest path through the medial axis
-    (Voronoi edges of boundary samples that lie inside), smoothed with a
-    ±`smooth` px moving average, extended straight past both ends by
-    `extend` × its length (the raster decides what's inside), evenly
-    resampled every `step` px, oriented to read left→right (bottom→top
-    when vertical). route="longest" takes the skeleton's longest path;
-    "roomy" weights each edge by length × (clearance / max)², so the path
-    prefers wide parts over long thin tails (Twin City's widest room is
-    its right lobe, off the longest path). Returns [(x, y)] or None.
-    Pass a dict as `debug` to
-    get the construction stages (samples, skeleton, route, smoothed,
-    extended) for diagrams."""
-    import heapq
+    if debug is not None:
+        return _centerline(poly, step, smooth, extend, debug, route)
+    return _memo(("centerline", id(poly), step, smooth, extend, route),
+                 lambda: _centerline(poly, step, smooth, extend, None, route), poly)
 
-    from shapely.geometry import LineString, MultiPoint
+
+def _skeleton(poly, n=240):
+    """Voronoi skeleton of the shape (edges between boundary samples that
+    lie inside) with each edge's clearance — built once per shape and
+    shared by every route and smoothing level."""
+    from shapely.geometry import MultiPoint
     from shapely.ops import voronoi_diagram
 
     ring = poly.exterior
-    n = 240
     pts = MultiPoint([ring.interpolate(i / n, normalized=True) for i in range(n)])
     vor = voronoi_diagram(pts, edges=True)  # a collection of multilines
-    edges = [e for g in vor.geoms for e in getattr(g, "geoms", [g])
-             if e.within(poly)]
-    if debug is not None:
-        debug["samples"] = [(q.x, q.y) for q in pts.geoms]
-        debug["skeleton"] = [list(e.coords) for e in edges]
-    if not edges:
-        return None
-    bnd = poly.exterior
-    clear = [bnd.distance(e.interpolate(0.5, normalized=True)) for e in edges]
-    top = max(clear) or 1.0
+    allx = [e for g in vor.geoms for e in getattr(g, "geoms", [g])]
+    inside = shapely.within(allx, poly)  # vectorized
+    edges = [e for e, k in zip(allx, inside) if k]
+    mids = [e.interpolate(0.5, normalized=True) for e in edges]
+    clear = shapely.distance(ring, mids).tolist() if edges else []
+    return {"samples": [(q.x, q.y) for q in pts.geoms],
+            "edges": [list(e.coords) for e in edges],
+            "lengths": [e.length for e in edges], "clear": clear}
+
+
+def _route(sk, route):
+    """Longest (or roomiest) path through the skeleton: tree diameter by
+    two Dijkstra sweeps."""
+    import heapq
+
+    top = max(sk["clear"]) or 1.0
     adj = {}
-    for e, c in zip(edges, clear):
-        a, b = (tuple(round(v, 3) for v in e.coords[0]),
-                tuple(round(v, 3) for v in e.coords[-1]))
-        w = e.length * ((c / top) ** 2 if route == "roomy" else 1.0)
+    for cs, L, c in zip(sk["edges"], sk["lengths"], sk["clear"]):
+        a, b = (tuple(round(v, 3) for v in cs[0]), tuple(round(v, 3) for v in cs[-1]))
+        w = L * ((c / top) ** 2 if route == "roomy" else 1.0)
         adj.setdefault(a, []).append((b, w))
         adj.setdefault(b, []).append((a, w))
 
@@ -729,20 +780,51 @@ def centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None,
                     heapq.heappush(pq, (d + w, v))
         return max(dist, key=dist.get), prev
 
-    a, _ = far(max(adj, key=lambda k: len(adj[k])))  # tree diameter
+    a, _ = far(max(adj, key=lambda k: len(adj[k])))
     b, prev = far(a)
     path = [b]
     while path[-1] in prev:
         path.append(prev[path[-1]])
-    if len(path) < 3:
+    return path if len(path) >= 3 else None
+
+
+def _centerline(poly, step=2.0, smooth=24.0, extend=0.3, debug=None,
+                route="longest"):
+    """The shape's spine: the longest path through the medial axis
+    (Voronoi edges of boundary samples that lie inside), smoothed with a
+    ±`smooth` px moving average, extended straight past both ends by
+    `extend` × its length (the raster decides what's inside), evenly
+    resampled every `step` px, oriented to read left→right (bottom→top
+    when vertical). route="longest" takes the skeleton's longest path;
+    "roomy" weights each edge by length × (clearance / max)², so the path
+    prefers wide parts over long thin tails (Twin City's widest room is
+    its right lobe, off the longest path). Returns [(x, y)] or None.
+    Pass a dict as `debug` to
+    get the construction stages (samples, skeleton, route, smoothed,
+    extended) for diagrams."""
+    sk = _memo(("skeleton", id(poly)), lambda: _skeleton(poly), poly)
+    if debug is not None:
+        debug["samples"] = sk["samples"]
+        debug["skeleton"] = sk["edges"]
+    if not sk["edges"]:
+        return None
+    path = _memo(("route", id(poly), route), lambda: _route(sk, route), poly)
+    if path is None:
         return None
     if debug is not None:
         debug["route"] = list(path)
 
     def resample(cs):
-        ln = LineString(cs)
-        k = max(2, int(ln.length / step))
-        return [ln.interpolate(i / k, normalized=True).coords[0] for i in range(k + 1)]
+        """Evenly respaced every ~step px (numpy; shapely's per-point
+        interpolate dominated the profile)."""
+        import numpy as np
+
+        P = np.asarray(cs, dtype=float)
+        d = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(P, axis=0).T))])
+        k = max(2, int(d[-1] / step))
+        q = np.linspace(0.0, d[-1], k + 1)
+        return list(zip(np.interp(q, d, P[:, 0]).tolist(),
+                        np.interp(q, d, P[:, 1]).tolist()))
 
     pts = resample(path)
     # moving average, 3 passes, ends pinned: the medial axis wiggles with
@@ -874,12 +956,13 @@ class SpineFrame:
             k = sz / M.upm
             half = sz * M.cap / 2
             w = M.gs[g].width * k
-            a = self.xy(t, vm)
-            dt = w  # advance t until the mid-line has covered w
+            vc = _vcenter(r, sz, M) if "sizes" in r else vm
+            a = self.xy(t, vc)
+            dt = w  # advance t until the letter's mid-line has covered w
             for _ in range(3):
-                b = self.xy(t + dt, vm)
+                b = self.xy(t + dt, vc)
                 dt *= w / max(math.dist(a, b), 1e-6)
-            b = self.xy(t + dt, vm)
+            b = self.xy(t + dt, vc)
             d = max(math.dist(a, b), 1e-6)
             ux, uy = (b[0] - a[0]) / d, (b[1] - a[1]) / d
             px, py = -uy, ux
@@ -904,6 +987,10 @@ class SpineFrame:
 
 
 def spines(poly):
+    return _memo(("spines", id(poly)), lambda: _spines(poly), poly)
+
+
+def _spines(poly):
     """Spines along the longest and the roomiest skeleton route, each at
     light and medium smoothing (±120 px cut corners: Hillside's spine
     flattened its bend and grazed the notch — user agreed)."""
@@ -989,13 +1076,7 @@ def fit_swell(frame, line, M):
     np = frame.np
     res, free = frame.res, frame.free
     nv, nt = free.shape
-    if not hasattr(frame, "free_up"):
-        inside = free > 0
-        up = np.zeros_like(free)
-        up[0] = inside[0]
-        for r in range(1, nv):
-            up[r] = (up[r - 1] + 1) * inside[r]
-        frame.free_up = up
+    _ensure_up(frame)
     widths = []
     for ch in line:
         g = M.cmap.get(ord(ch))
@@ -1006,15 +1087,17 @@ def fit_swell(frame, line, M):
     if radius is not None:
         half_all = np.minimum(half_all, radius[None, :]
                               / (2 * SpineFrame.RADIUS_CAPS))
-    rows_by_room = np.argsort(-np.clip(half_all, 0, None).sum(axis=1))[:10]
+    rows_by_room = np.argsort(-np.clip(half_all, 0, None).sum(axis=1))[:6]
     best = None
     for rc in rows_by_room:
         h = np.clip(half_all[rc], 0, None)  # half-height free per column
         if h.max() * 2 / M.cap < MIN_SIZE:
             continue
         cols = np.flatnonzero(h * 2 / M.cap >= MIN_SIZE)
-        for c0 in cols[::max(1, len(cols) // 40)]:
-            sizes = _swell_sizes(h, c0, widths, res, M)
+        # base: a uniform size that fits this row's run of room
+        base = 2 * float(np.median(h[h > 0])) / M.cap if (h > 0).any() else MIN_SIZE
+        for c0 in cols[::max(1, len(cols) // 16)]:
+            sizes = _best_swell(h, c0, widths, res, M, base)
             if sizes is None:
                 continue
             ink = sum(sz * sz * w for sz, w in zip(sizes, widths))
@@ -1032,11 +1115,29 @@ def fit_swell(frame, line, M):
             "v0": vmid - top, "v1": vmid + top, "frame": frame}
 
 
-def _swell_sizes(h, c0, widths, res, M):
+def _best_swell(h, c0, widths, res, M, base):
+    """_swell_sizes over a sweep of overall caps; the most ink wins.
+    Without a cap the first letter grows as big as its room allows, the
+    word runs long, its tail lands where there's no room, and the 1.5×
+    word rule drags every letter down to the tail's size (Duck Village's
+    top line came out at 10px)."""
+    best = None
+    for f in (0.8, 0.95, 1.1, 1.25, 1.45, 1.7, 2.0):
+        sizes = _swell_sizes(h, c0, widths, res, M, cap=base * f)
+        if sizes is None:
+            continue
+        ink = sum(sz * sz * w for sz, w in zip(sizes, widths))
+        if best is None or ink > best[0]:
+            best = (ink, sizes)
+    return best[1] if best else None
+
+
+def _swell_sizes(h, c0, widths, res, M, cap=MAX_SIZE):
     """Letter sizes laid left→right from column c0 over the half-height
-    profile h; smoothed both ways; None if the word doesn't fit."""
+    profile h, none above `cap`; smoothed both ways; None if the word
+    doesn't fit."""
     nt = len(h)
-    sizes = [MAX_SIZE] * len(widths)
+    sizes = [min(cap, MAX_SIZE)] * len(widths)
     for _ in range(4):
         pos, prev, new = c0 * res, None, []
         for i, w in enumerate(widths):
@@ -1044,11 +1145,15 @@ def _swell_sizes(h, c0, widths, res, M):
             if prev is not None:
                 ub = min(ub, prev * (1 + SWELL_STEP))
             sz = ub
-            for _ in range(8):  # size ↔ span fixed point (span grows with size)
+            # size ↔ span fixed point: shrinking a letter shortens its span,
+            # which can only raise the room under it — monotone, so iterate
+            # to convergence (8 capped rounds let letters overshoot their
+            # room, and refine then shrank the whole line: swell lost)
+            for _ in range(40):
                 a = int(pos / res)
                 b = int((pos + sz * w) / res) + 1
-                if b > nt:
-                    sz *= 0.85
+                if b > nt:  # runs off the frame: shorten to fit
+                    sz = min(sz * 0.97, max(0.0, (nt - 1) * res - pos) / max(w, 1e-6))
                     continue
                 room = 2 * h[a:b].min() / M.cap if b > a else sz
                 if room >= sz * 0.995:
@@ -1070,6 +1175,88 @@ def _swell_sizes(h, c0, widths, res, M):
     return sizes
 
 
+def swell_rows(rows, M):
+    """Swell each line of a stacked layout: letters take their own sizes
+    from the room around them. The top line grows up from its baseline,
+    the bottom line down from its cap line (the gap between lines stays
+    even; the label's outer silhouette follows the shape); a middle line
+    or a lone line stays centered. Returns new rows, or None."""
+    out = []
+    for r in rows:
+        fr = r["frame"]
+        np, res = fr.np, fr.res
+        _ensure_up(fr)
+        nv, nt = fr.free.shape
+        same = [o for o in rows if o is not r and o["frame"] is fr]
+        above = [o for o in same if o["v1"] <= r["v0"] + 1e-6]
+        below = [o for o in same if o["v0"] >= r["v1"] - 1e-6]
+        anchor = ("bottom" if below and not above else
+                  "top" if above and not below else "center")
+        if anchor == "bottom":
+            rb = int(math.floor((r["v1"] - fr.vmin) / res)) - 1
+            if not 0 <= rb < nv:
+                return None
+            h = fr.free_up[rb] * res / 2
+        elif anchor == "top":
+            rt = int(math.ceil((r["v0"] - fr.vmin) / res))
+            if not 0 <= rt < nv:
+                return None
+            h = fr.free[rt] * res / 2
+        else:
+            vm = (r["v0"] + r["v1"]) / 2
+            rc = int((vm - fr.vmin) / res)
+            if not 0 <= rc < nv:
+                return None
+            h = (np.minimum(fr.free_up[rc], fr.free[rc]) - 0.5) * res
+            gap = LEADING * M.cap * r["size"]
+            for o in above:
+                h = np.minimum(h, vm - o["v1"] - gap)
+            for o in below:
+                h = np.minimum(h, o["v0"] - gap - vm)
+        radius = getattr(fr, "radius_col", None)
+        if radius is not None:
+            h = np.minimum(h, radius / (2 * SpineFrame.RADIUS_CAPS))
+        h = np.clip(h, 0, None)
+        widths = [M.gs[M.cmap[ord(ch)]].width / M.upm if ord(ch) in M.cmap else 0.0
+                  for ch in r["line"]]
+        c_start = int((r["t0"] - fr.tmin) / res)
+        w_cols = max(1, int((r["t1"] - r["t0"]) / res))
+        best = None
+        for c0 in range(max(0, c_start - w_cols // 3),
+                        min(nt - 1, c_start + w_cols // 3) + 1, max(1, w_cols // 6)):
+            sizes = _best_swell(h, c0, widths, res, M, r["size"])
+            if sizes is None:
+                continue
+            ink = sum(sz * sz * w for sz, w in zip(sizes, widths))
+            if best is None or ink > best[0]:
+                best = (ink, c0, sizes)
+        if best is None:
+            out.append(dict(r))
+            continue
+        _, c0, sizes = best
+        t0 = fr.tmin + c0 * res
+        top = max(sizes) * M.cap
+        if anchor == "bottom":
+            v0, v1 = r["v1"] - top, r["v1"]
+        elif anchor == "top":
+            v0, v1 = r["v0"], r["v0"] + top
+        else:
+            vm = (r["v0"] + r["v1"]) / 2
+            v0, v1 = vm - top / 2, vm + top / 2
+        out.append({**r, "sizes": sizes, "size": min(sizes), "anchor": anchor,
+                    "t0": t0, "t1": t0 + sum(sz * w for sz, w in zip(sizes, widths)),
+                    "v0": v0, "v1": v1})
+    # lines must still overlap along the baseline (one block, not scattered)
+    same_frame = [r for r in out]
+    for ra, rb_ in zip(same_frame, same_frame[1:]):
+        if ra["frame"] is not rb_["frame"]:
+            continue
+        ov = min(ra["t1"], rb_["t1"]) - max(ra["t0"], rb_["t0"])
+        if ov < OVERLAP * min(ra["t1"] - ra["t0"], rb_["t1"] - rb_["t0"]):
+            return None
+    return out
+
+
 # --- search ----------------------------------------------------------------------
 
 def _row_angle(r, M):
@@ -1077,6 +1264,27 @@ def _row_angle(r, M):
     pl = r["frame"].place(r, M)
     (x0, y0), (x1, y1) = pl[0][2][4:6], pl[-1][2][4:6]
     return math.atan2(y1 - y0, x1 - x0)
+
+
+def _row_mid(r, M):
+    pl = r["frame"].place(r, M)
+    (x0, y0), (x1, y1) = pl[0][2][4:6], pl[-1][2][4:6]
+    return (x0 + x1) / 2, (y0 + y1) / 2
+
+
+def _reads_in_order(r1, r2, M):
+    """Does word r2 read after r1? Measured along their mean reading
+    direction: ahead of it, or below it in that frame."""
+    a1, a2 = _row_angle(r1, M), _row_angle(r2, M)
+    ux, uy = math.cos(a1) + math.cos(a2), math.sin(a1) + math.sin(a2)
+    n = math.hypot(ux, uy) or 1.0
+    ux, uy = ux / n, uy / n
+    (x1, y1), (x2, y2) = _row_mid(r1, M), _row_mid(r2, M)
+    dx, dy = x2 - x1, y2 - y1
+    d = math.hypot(dx, dy) or 1.0
+    along = dx * ux + dy * uy
+    across = dx * -uy + dy * ux  # "down" in the reading frame
+    return along > 0.3 * d or (across > 0 and along > -0.3 * d)
 
 
 def _floor(rows):
@@ -1137,16 +1345,15 @@ def _splits(regs, cands, M, consecutive=False):
         got = []
         reg = regs[k]
         for th in angles(reg):
-            u, p = axis(th)
-            res = fit_lines(Frame(reg, u, p), [word], M)
+            res = fit_lines(frame_at(reg, th), [word], M)
             if res:
                 rows = max(res, key=lambda rs: rs[0]["size"])
                 got.append((rows[0]["size"], rows, _row_angle(rows[0], M), th, 0.0))
         if SPLIT_FRAMES == "all":
-            sw_frames = [Frame(reg, *axis(th)) for th in angles(reg)[-4:]]
-            for sp in spines(reg):
+            sw_frames = [frame_at(reg, th) for th in angles(reg)[-4:]]
+            for i_, sp in enumerate(spines(reg)):
                 for rev in (False, True):
-                    f_ = SpineFrame(reg, sp, reverse=rev)
+                    f_ = spine_frame(reg, i_, sp, rev)
                     sw_frames.append(f_)
                     for rows in fit_lines(f_, [word], M):
                         if f_.reads_forward(rows):
@@ -1203,11 +1410,10 @@ def _splits(regs, cands, M, consecutive=False):
             if got is None:
                 continue
             (r1, th1, e1), (r2, th2, e2) = got
-            # the second word reads after the first on the *page* — to its
-            # right or below (measuring along the first word's own axis
-            # rejected TWIN on Twin City's diagonal arm, CITY to its right)
-            c1, c2 = regs[order[0]].centroid, regs[order[1]].centroid
-            if (c2.x - c1.x) + (c2.y - c1.y) <= 0:
+            # the second word reads after the first along the two words'
+            # shared reading direction — ahead, or below in that frame
+            # (a page "right or below" test let Hillside read SIDE HILL)
+            if not _reads_in_order(r1[0], r2[0], M):
                 continue
             parts = [dict(r1[0]), dict(r2[0])]
             lo_ = min(r["size"] for r in parts)
@@ -1223,120 +1429,118 @@ def _splits(regs, cands, M, consecutive=False):
 
 
 def search(polygon, name, M):
-    """Best layout for `name` in `polygon` over candidates × angles
-    (stacked, or split across lobes), refined against real outlines."""
+    """Best layout for `name` in `polygon`. Candidates: straight stacks at
+    every angle; curved stacks on the spines (long shapes); single-line
+    swell (every shape); splits at lobes (HERO_SPLITS) and bends (long
+    shapes), each word straight, curved or swelling. The finalists also
+    try a stacked swell, are refined against real outlines, and are ranked
+    by exact ink coverage (OBJECTIVE="ink", above the legibility floor)."""
+    _MEMO.clear()
     inner = polygon.buffer(-MARGIN)
     if inner.is_empty:
         return None
     if inner.geom_type == "MultiPolygon":
         inner = max(inner.geoms, key=lambda g: g.area)
     cands = candidates(name)
-    # lobes: try 2- and 3-way decompositions (North Point: NORTH in the
-    # middle lobe, POINT in the last — user)
-    regs = None
-    if name in HERO_SPLITS:
+    long_ = _elongation(inner) >= CURVE_ELONGATION
+    f_curves, f_swell, f_bends = (name in HERO_CURVES, name in HERO_SWELL,
+                                  name in HERO_BENDS)
+    pool = []  # (rows, lines, pen, th, ratio, kind)
+    for th in angles(inner):  # straight stacks
+        fr = frame_at(inner, th)
+        for lines, pen in cands:
+            for rows in fit_lines(fr, lines, M):
+                pool.append((rows, lines, pen, th, MAX_RATIO, "straight"))
+    spine_fs = []
+    if long_ or f_curves:  # curved stacks
+        for i, sp in enumerate(spines(inner)):
+            for rev in (False, True):
+                fr = spine_frame(inner, i, sp, rev)
+                spine_fs.append(fr)
+                for lines, pen in cands:
+                    for rows in fit_lines(fr, lines, M):
+                        if fr.reads_forward(rows):
+                            pool.append((rows, lines, pen + PENALTY["curve"],
+                                         fr.angle, MAX_RATIO, "curve"))
+    sw = [(frame_at(inner, th), th) for th in angles(inner)[-4:]]
+    sw += [(fr, fr.angle) for fr in spine_fs]
+    for fr, th in sw:  # single-line swell, every shape
+        for lines, pen in cands:
+            if len(lines) != 1:
+                continue
+            row = fit_swell(fr, lines[0], M)
+            if row is None or (isinstance(fr, SpineFrame)
+                               and not fr.reads_forward([row])):
+                continue
+            pen_s = pen + PENALTY["swell"] + (
+                PENALTY["curve"] if isinstance(fr, SpineFrame) else 0)
+            pool.append(([row], lines, pen_s, th, MAX_RATIO, "swell"))
+    split_sets = []
+    if name in HERO_SPLITS:  # lobes (North Point: NORTH … POINT — user)
         regs = []
         for n_ in (2, 3):
             regs += lobe_regions(inner, n_) or []
-    scored = []  # (score, rows, lines, pen, th, ratio)
-    for th in angles(inner):
-        u, p = axis(th)
-        frame = Frame(inner, u, p)
-        for lines, pen in cands:
-            for rows in fit_lines(frame, lines, M):
-                scored.append((_score(rows, pen, th, M, inner), rows, lines,
-                               pen, th, MAX_RATIO))
-    if regs:
-        scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
-                   for x in _splits(regs, cands, M)]
-    # word breaks at sharp bends of the raw skeleton route (Twin City)
-    if name in HERO_BENDS or _elongation(inner) >= CURVE_ELONGATION:
-        bends = []
+        if regs:
+            split_sets.append((regs, False, "lobes"))
+    if long_ or f_bends:  # word breaks at sharp bends (Twin City)
+        seen = []
         for route in ("longest", "roomy"):
             got = bend_regions(inner, route=route)
             if got and not any(len(got) == len(b) and got[0].equals(b[0])
-                               for b in bends):
-                bends.append(got)
-        if name in HERO_BENDS:
-            scored = []
-        for regs_b in bends:
-            scored += [(_score(x[1], x[3], x[4], M, inner),) + x[1:]
-                       for x in _splits(regs_b, cands, M, consecutive=True)]
-    # swell: single lines with per-letter sizes, on the main straight axes
-    # and (for long shapes) the spines
-    swell_forced = name in HERO_SWELL
-    if swell_forced or _elongation(inner) >= CURVE_ELONGATION:
-        sw = []
-        for th in angles(inner)[-4:]:  # min-rect axis + longest edges
-            u, p = axis(th)
-            sw.append((Frame(inner, u, p), th))
-        for sp in spines(inner):
-            for rev in (False, True):
-                f_ = SpineFrame(inner, sp, reverse=rev)
-                sw.append((f_, f_.angle))
-        for frame, th in sw:
-            for lines, pen in cands:
-                if len(lines) != 1:
-                    continue
-                row = fit_swell(frame, lines[0], M)
-                if row is None:
-                    continue
-                if isinstance(frame, SpineFrame) and not frame.reads_forward([row]):
-                    continue
-                pen_s = pen + PENALTY["swell"] + (
-                    PENALTY["curve"] if isinstance(frame, SpineFrame) else 0)
-                entry = (_score([row], pen_s, th, M, inner), [row], lines,
-                         pen_s, th, MAX_RATIO)
-                scored.append(entry)
-    forced = name in HERO_CURVES
-    if forced or _elongation(inner) >= CURVE_ELONGATION:
-        if forced:
-            scored = []  # curves only (config HERO_CURVES)
-        for sp in spines(inner):
-            for rev in (False, True):  # readability is judged locally
-                frame = SpineFrame(inner, sp, reverse=rev)
-                for lines, pen in cands:
-                    pen_c = pen + PENALTY["curve"]
-                    for rows in fit_lines(frame, lines, M):
-                        if frame.reads_forward(rows):
-                            scored.append((_score(rows, pen_c, frame.angle, M,
-                                                  inner),
-                                           rows, lines, pen_c, frame.angle,
-                                           MAX_RATIO))
-    if swell_forced:  # swell only (config HERO_SWELL)
-        scored = [x for x in scored if "sizes" in x[1][0]]
-    if name in HERO_BENDS:  # bend splits only (config HERO_BENDS)
-        scored = [x for x in scored if x[5] == SPLIT_RATIO]
-    if not scored:
+                               for b in seen):
+                seen.append(got)
+                split_sets.append((got, True, "bends"))
+    for regs, consec, kind in split_sets:
+        for x in _splits(regs, cands, M, consecutive=consec):
+            pool.append((x[1], x[2], x[3], x[4], SPLIT_RATIO, kind))
+    if f_curves:
+        pool = [x for x in pool if x[5] == "curve"]
+    if f_bends:
+        pool = [x for x in pool if x[5] == "bends"]
+    if f_swell:
+        pool = [x for x in pool if x[5] == "swell"]
+    if not pool:
         return None
+
+    tilt = lambda th: 1 - PENALTY["tilt"] * abs(math.sin(th))
     if OBJECTIVE == "ink":
-        # the most ink among layouts whose smallest letter clears the floor
-        need = LEGIBILITY_FLOOR * max(_floor(x[1]) for x in scored)
-
-        def ink_score(rows, pen, th):
-            ink = sum(_ink(r, M) for r in rows) / inner.area
-            return ink * (1 - pen) * (1 - PENALTY["tilt"] * abs(math.sin(th)))
-
-        scored = [(ink_score(x[1], x[3], x[4]),) + x[1:] for x in scored
-                  if _floor(x[1]) >= need]
-    scored.sort(key=lambda x: -x[0])
-    best = None
-    for _, rows, lines, pen, th, ratio in scored[:REFINE_TOP]:
-        rows = refine(rows, M, ratio)
-        if rows is None:
+        need = LEGIBILITY_FLOOR * max(_floor(x[0]) for x in pool)
+        pool = [x for x in pool if _floor(x[0]) >= need]
+        est = lambda x: (sum(_ink(r, M) for r in x[0]) / inner.area
+                         * (1 - x[2]) * tilt(x[3]))
+    else:
+        need = 0
+        est = lambda x: _score(x[0], x[2], x[3], M, inner)
+    pool.sort(key=lambda x: -est(x))
+    finals = list(pool[:REFINE_TOP])
+    # stacked swell variants of the finalists (swell-maxing pass)
+    for x in list(finals):
+        if any("sizes" in r for r in x[0]):
             continue
-        if OBJECTIVE == "ink":
-            if _floor(rows) < need:
-                continue
-            sc = ink_score(rows, pen, th)
+        sw_rows = swell_rows(x[0], M)
+        if sw_rows and any("sizes" in r for r in sw_rows):
+            finals.append((sw_rows, x[1], x[2] + PENALTY["swell"], x[3], x[4],
+                           x[5] + "+swell"))
+    best = None
+    for rows, lines, pen, th, ratio, kind in finals:
+        rows = refine(rows, M, ratio)
+        if rows is None or _floor(rows) < need:
+            continue
+        if OBJECTIVE == "ink":  # exact: real outlines inside the shape
+            ink = unary_union([outline(r, M) for r in rows])
+            cov = ink.intersection(polygon).area / polygon.area
+            sc = cov * (1 - pen) * tilt(th)
+            if TRACE is not None:  # diagnostics: every finalist's numbers
+                TRACE.append((name, kind, " / ".join(lines), round(cov, 4),
+                              round(sc, 4), round(_floor(rows), 1)))
         else:
             sc = _score(rows, pen, th, M, inner)
         if best is None or sc > best[0]:
-            best = (sc, rows, lines, pen, th)
+            best = (sc, rows, lines, pen, th, kind)
     if best is None:
         return None
     return {"rows": best[1], "lines": best[2], "penalty": best[3],
-            "angle": math.degrees(best[4])}
+            "angle": math.degrees(best[4]), "kind": best[5]}
 
 
 def render(doc, result, M, fill):
